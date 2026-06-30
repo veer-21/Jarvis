@@ -1,0 +1,86 @@
+"""
+JARVIS Tools Package
+Auto-discovery registry for all tool modules.
+"""
+
+from core.logger import log
+
+
+def get_tool_registry() -> dict:
+    """
+    Auto-discover and return all available tool functions.
+
+    Returns:
+        Dict mapping tool names to their callables.
+    """
+    registry = {}
+
+    # Import all tool modules
+    try:
+        from tools import system_tools
+        registry["execute_command"] = system_tools.execute_command
+    except ImportError as e:
+        log.warning(f"system_tools unavailable: {e}")
+
+    try:
+        from tools import file_tools
+        registry["read_file"]        = file_tools.read_file
+        registry["write_file"]       = file_tools.write_file
+        registry["list_directory"]   = file_tools.list_directory
+        registry["safe_delete_file"] = file_tools.safe_delete_file
+        registry["get_file_info"]    = file_tools.get_file_info
+        registry["search_in_files"]  = file_tools.search_in_files
+    except ImportError as e:
+        log.warning(f"file_tools unavailable: {e}")
+
+    try:
+        from tools import web_tools
+        registry["web_search"]    = web_tools.web_search
+        registry["fetch_webpage"] = web_tools.fetch_webpage
+        registry["get_weather"]   = web_tools.get_weather
+        registry["search_news"]   = web_tools.search_news
+    except ImportError as e:
+        log.warning(f"web_tools unavailable: {e}")
+
+    try:
+        from tools import automation_tools
+        registry["open_application"] = automation_tools.open_application
+        registry["take_screenshot"]  = automation_tools.take_screenshot
+        registry["analyze_screen"]   = automation_tools.analyze_screen
+        registry["get_system_info"]  = automation_tools.get_system_info
+        registry["press_key"]        = automation_tools.press_key
+        registry["type_text"]        = automation_tools.type_text
+    except ImportError as e:
+        log.warning(f"automation_tools unavailable: {e}")
+
+    try:
+        from tools import browser_tools
+        registry["open_url"]            = browser_tools.open_url
+        registry["get_page_text"]       = browser_tools.get_page_text
+        registry["browser_screenshot"]  = browser_tools.browser_screenshot
+        registry["browser_click"]       = browser_tools.browser_click
+        registry["browser_fill"]        = browser_tools.browser_fill
+    except ImportError as e:
+        log.warning(f"browser_tools unavailable: {e}")
+
+    log.info(f"Tool registry: {len(registry)} tools discovered")
+    return registry
+
+
+def get_tool_categories() -> dict[str, list[str]]:
+    """
+    Return tool names organized by category.
+
+    Returns:
+        Dict mapping category names to lists of tool names.
+    """
+    return {
+        "system":     ["execute_command"],
+        "file":       ["read_file", "write_file", "list_directory", "safe_delete_file",
+                        "get_file_info", "search_in_files"],
+        "web":        ["web_search", "fetch_webpage", "get_weather", "search_news"],
+        "automation": ["open_application", "take_screenshot", "analyze_screen", "get_system_info",
+                        "press_key", "type_text"],
+        "browser":    ["open_url", "get_page_text", "browser_screenshot",
+                        "browser_click", "browser_fill"],
+    }

@@ -1,0 +1,65 @@
+# ============================================================
+#  JARVIS AI OS — Python Dependencies
+#  Install: pip install -r requirements.txt
+# ============================================================
+
+# ── Core AI / LLM ────────────────────────────────────────────
+google-genai>=1.0.0             # Gemini LLM SDK (brain)
+
+# ── Web Framework & API ──────────────────────────────────────
+fastapi>=0.115.0                # REST + WebSocket API
+uvicorn[standard]>=0.32.0       # ASGI server
+pydantic>=2.7.0                 # Data validation / schemas
+python-multipart>=0.0.12        # File upload support
+
+# ── Authentication & Security ─────────────────────────────────
+PyJWT>=2.9.0                    # JWT token generation / validation
+bcrypt>=4.2.0                   # Secure PIN hashing
+cryptography>=43.0.0            # Fernet symmetric encryption
+
+# ── Memory / Vector DB ───────────────────────────────────────
+chromadb>=0.5.0                 # Semantic vector memory (optional but recommended)
+
+# ── Voice / Speech ────────────────────────────────────────────
+SpeechRecognition>=3.10.0       # STT via Google / Whisper
+pyttsx3>=2.90                   # TTS (offline, no API key needed)
+pyaudio>=0.2.14                 # Microphone input
+pvporcupine>=3.0.0              # Local wake word detection
+
+# ── Browser Automation ────────────────────────────────────────
+playwright>=1.47.0              # Browser automation (run: playwright install chromium)
+
+# ── Desktop Automation ────────────────────────────────────────
+pyautogui>=0.9.54               # Mouse, keyboard, screenshot control
+Pillow>=11.0.0                  # Screenshot image processing
+
+# ── System Monitoring ─────────────────────────────────────────
+psutil>=6.0.0                   # CPU, RAM, disk, network stats
+
+# ── Web / HTTP ────────────────────────────────────────────────
+requests>=2.32.0                # HTTP requests
+beautifulsoup4>=4.12.0          # HTML parsing / web scraping
+duckduckgo-search>=6.3.0        # Web + news search (no API key)
+
+# ── Environment & Config ──────────────────────────────────────
+python-dotenv>=1.0.0            # .env file loading
+
+# ── Optional: Local Whisper STT ──────────────────────────────
+# Uncomment to enable local offline speech recognition:
+openai-whisper>=20240930
+torch>=2.4.0
+
+# ── Optional: Vision / OCR ───────────────────────────────────
+# Uncomment to enable screen understanding:
+# opencv-python>=4.10.0
+# pytesseract>=0.3.13
+# easyocr>=1.7.0
+
+# ── Optional: ElevenLabs TTS ─────────────────────────────────
+# Uncomment for premium neural voice:
+elevenlabs>=1.9.0
+
+# ── Dev / Testing ─────────────────────────────────────────────
+# pytest>=8.0.0
+# pytest-asyncio>=0.23.0
+# httpx>=0.27.0                 # Test FastAPI without a running server
