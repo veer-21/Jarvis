@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer utilities {
+  .glass-panel {
+    @apply bg-jarvis-card backdrop-blur-xl border border-jarvis-border shadow-2xl;
+  }
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  /* Dark textured background simulating the OS desktop behind the app */
+  background: radial-gradient(circle at 50% 0%, #1a1a2e 0%, #0a0a0c 100%);
+  color: white;
+}
