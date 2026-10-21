@@ -1,4 +1,4 @@
-import { app, BrowserWindow, globalShortcut } from 'electron'
+import { app, BrowserWindow, globalShortcut, ipcMain } from 'electron'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
@@ -46,15 +46,55 @@ function createWindow() {
 app.whenReady().then(() => {
   createWindow()
 
-  // Global shortcut to toggle JARVIS window instantly (Ctrl+Shift+J)
-  globalShortcut.register('CommandOrControl+Shift+J', () => {
+  // Register window control IPC listeners for frontend React interactions
+  ipcMain.on('window-close', () => {
+    if (mainWindow) {
+      // Triggers window close event, which will be intercepted to hide it
+      mainWindow.close()
+    }
+  })
+
+  ipcMain.on('window-minimize', () => {
+    if (mainWindow) {
+      mainWindow.minimize()
+    }
+  })
+
+  ipcMain.on('window-maximize', () => {
+    if (mainWindow) {
+      if (mainWindow.isMaximized()) {
+        mainWindow.restore()
+      } else {
+        mainWindow.maximize()
+      }
+    }
+  })
+
+  const toggleJarvisWindow = () => {
+    if (!mainWindow) return
     if (mainWindow.isVisible()) {
       mainWindow.hide()
     } else {
       mainWindow.show()
       mainWindow.focus()
     }
-  })
+  }
+
+  // Global shortcut to toggle JARVIS window instantly: Alt+Space and fallback CommandOrControl+Shift+J
+  try {
+    const okAltSpace = globalShortcut.register('Alt+Space', toggleJarvisWindow)
+    if (!okAltSpace) {
+      console.warn('Alt+Space global shortcut registration failed, falling back to CommandOrControl+Shift+J.')
+    }
+  } catch (err) {
+    console.warn('Could not register Alt+Space global shortcut:', err)
+  }
+
+  try {
+    globalShortcut.register('CommandOrControl+Shift+J', toggleJarvisWindow)
+  } catch (err) {
+    console.warn('Could not register CommandOrControl+Shift+J global shortcut:', err)
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
