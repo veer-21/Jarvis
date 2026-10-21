@@ -15,8 +15,16 @@ def get_openai_api_key():
 def get_ollama_host():
     return os.environ.get("OLLAMA_HOST")
 
+def get_primary_engine():
+    return os.environ.get("PRIMARY_ENGINE", "gemini").lower()
+
+def get_groq_model():
+    return os.environ.get("GROQ_MODEL", "qwen/qwen3.8-27b")
+
 def get_model_name():
-    return os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+    return os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+
+
 
 # --- Voice Settings ---
 def get_voice_engine():

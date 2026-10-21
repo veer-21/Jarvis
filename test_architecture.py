@@ -16,6 +16,8 @@ def test(name, condition):
         print(f"  [FAIL] {name}")
         failed += 1
 
+test.__test__ = False
+
 print("=" * 55)
 print("  JARVIS v3.0 — Full Architecture Verification")
 print("=" * 55)
@@ -149,3 +151,10 @@ if failed == 0:
 else:
     print(f"  {passed}/{total} passed, {failed} FAILED")
 print(f"{'=' * 55}")
+
+def test_architecture():
+    assert failed == 0
+
+if __name__ == "__main__":
+    if failed > 0:
+        sys.exit(1)

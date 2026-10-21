@@ -2,13 +2,12 @@ import os
 import asyncio
 from core.brain.goal_executor import GoalExecutor, RiskLevel
 
-# Create a dummy brain
-class DummyBrain:
-    pass
+from core.brain.brain import Brain
 
 def test_goal_executor():
-    print("Initializing Goal Executor...")
-    executor = GoalExecutor(brain=DummyBrain())
+    print("Initializing Goal Executor with Brain...")
+    brain = Brain()
+    executor = GoalExecutor(brain=brain)
 
     goals = [
         "open Chrome",
@@ -29,7 +28,7 @@ def test_goal_executor():
         if executor.active_plan:
             print("Generated DAG:")
             for node in executor.active_plan.tasks:
-                print(f"  [{node.id}] {node.description} (Tool: {node.tool_required})")
+                print(f"  [{node.id}] {node.description} (Tool: {node.tool_name})")
         print(f"Process Result: {result}\\n")
         
         if executor.active_plan and executor.active_plan.overall_risk in [RiskLevel.MEDIUM, RiskLevel.HIGH]:

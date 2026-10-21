@@ -6,21 +6,24 @@ No secondary LLM planning or tool choosing occurs here.
 
 import json
 from core.agents.base_agent import BaseAgent, AgentRole, AgentMessage, AgentResponse
+from core.agents.vision_abstraction import VisionScreenUnderstanding
 from core.logger import log, error_log
 
 class OperatorAgent(BaseAgent):
     """
-    Deterministic execution layer.
+    Deterministic execution layer with perceptual verification.
+    Implements a Perception-Planning-Action loop for OS and desktop actions.
     """
 
     def __init__(self, tool_router, brain=None):
         super().__init__("operator", AgentRole.TOOL)
         self.tool_router = tool_router
         self._brain = brain
-        log.info("OperatorAgent initialized as deterministic executor.")
+        self.vision = VisionScreenUnderstanding(brain=brain)
+        log.info("OperatorAgent initialized with Perception-Planning-Action execution loop.")
 
     def process(self, message: AgentMessage) -> AgentResponse:
-        """Process incoming execution requests."""
+        """Process incoming execution requests with perception and state verification."""
         task_data = message.metadata.get("task")
         execution_context = message.metadata.get("execution_context", {})
         
@@ -29,6 +32,7 @@ class OperatorAgent(BaseAgent):
             
         node_type = task_data.get("node_type", "action")
         task_id = task_data.get("id", "unknown")
+        expected_state = task_data.get("expected_state")
         
         log.info(f"[OperatorAgent] Executing {node_type} Task {task_id}: {task_data.get('description')}")
         
@@ -41,10 +45,33 @@ class OperatorAgent(BaseAgent):
                 tool_name = task_data.get("tool_name")
                 if not tool_name:
                     return AgentResponse(success=False, content="Missing tool_name for action node.", agent=self.name)
+                
+                # Check for target application focus requirement
+                target_window = resolved_args.pop("target_window", None)
+                if target_window:
+                    from tools.automation_tools import focus_window
+                    log.info(f"[OperatorAgent] Pre-action: Focusing window '{target_window}'")
+                    focus_window(target_window)
+
+                # Check if target element requires visual coordinate grounding
+                element_desc = resolved_args.pop("target_element", None)
+                if element_desc and tool_name == "click_mouse":
+                    coords = self.vision.find_element(element_desc)
+                    if coords:
+                        resolved_args["x"] = coords["x"]
+                        resolved_args["y"] = coords["y"]
+                        log.info(f"[OperatorAgent] Grounded '{element_desc}' to coordinates ({coords['x']}, {coords['y']})")
+                    else:
+                        log.warning(f"[OperatorAgent] Could not visually ground element: '{element_desc}'")
                     
                 result = self.tool_router.execute_tool(name=tool_name, args=resolved_args, interactive=True)
                 
                 if result["success"]:
+                    # Post-action perceptual verification if requested
+                    if expected_state:
+                        verified = self.vision.verify_state(expected_state)
+                        if not verified:
+                            log.warning(f"[OperatorAgent] Task {task_id} completed action but failed perceptual verification for: {expected_state}")
                     return AgentResponse(success=True, content=str(result["result"]), agent=self.name)
                 else:
                     return AgentResponse(success=False, content=str(result.get("error")), agent=self.name, error=str(result.get("error")))

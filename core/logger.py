@@ -72,10 +72,17 @@ def _make_rotating_handler(filename: str, max_bytes: int = 5_000_000, backup_cou
 
 
 def _make_console_handler(level: int = logging.INFO) -> logging.Handler:
+    # Ensure stdout handles emojis and unicode on Windows cmd/powershell
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(level)
     handler.setFormatter(ConsoleFormatter())
     return handler
+
 
 
 # ─── Logger Factory ──────────────────────────────────────────────────────────

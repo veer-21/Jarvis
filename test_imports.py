@@ -65,5 +65,8 @@ for r in results:
 
 print("="*55)
 print(f"  {passes} passed  |  {fails} failed")
-print("="*55)
-sys.exit(0 if fails == 0 else 1)
+def test_imports():
+    assert fails == 0
+
+if __name__ == "__main__":
+    sys.exit(0 if fails == 0 else 1)

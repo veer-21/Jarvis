@@ -22,27 +22,39 @@ class RefinerAgent(BaseAgent):
 
     def process(self, message: AgentMessage) -> AgentResponse:
         """
-        Process an optimization request.
+        Process an optimization request scoped to the authenticated caller owner (P0-1, P0-4).
         """
         if not self.brain or not self.brain.memory_manager:
             return AgentResponse(success=False, content="Memory manager is offline.", agent="refiner")
 
+        user_id = message.user_id
+        is_system = getattr(message, "system_authorized", False)
+        if not user_id and not is_system:
+            return AgentResponse(
+                success=False,
+                content="Workflow optimization requires a verified user owner identity.",
+                agent="refiner",
+                error="UNAUTHORIZED_MISSING_OWNER"
+            )
+
         try:
-            return self._optimize_workflows()
+            return self._optimize_workflows(user_id=user_id, allow_system_scope=is_system)
         except Exception as e:
             error_log.error(f"RefinerAgent failed: {e}")
             return AgentResponse(success=False, content=f"Optimization failed: {e}", agent="refiner")
 
-    def _optimize_workflows(self) -> AgentResponse:
-        log.info("RefinerAgent started workflow optimization cycle.")
+    def _optimize_workflows(self, user_id: Optional[str] = None, allow_system_scope: bool = False) -> AgentResponse:
+        log.info(f"RefinerAgent started workflow optimization cycle for user={user_id} (allow_system_scope={allow_system_scope}).")
         
-        # 1. Fetch recent tasks from memory
+        # 1. Fetch recent tasks from memory scoped to owner
         db = self.brain.memory_manager._memory
         if not db:
             return AgentResponse(success=False, content="ChromaDB offline.", agent="refiner")
             
-        # We search for "Task executed" in memory to find recent workflows
-        results = db.retrieve_memories("Task executed", top_k=10)
+        # We search for "Task executed" or "Task" in memory to find recent workflows for this owner
+        results = db.retrieve_memories("Task executed", top_k=10, category="task", user_id=user_id, allow_system_scope=allow_system_scope)
+        if not results:
+            results = db.retrieve_memories("Task", top_k=10, category="task", user_id=user_id, allow_system_scope=allow_system_scope)
         if not results:
             return AgentResponse(success=True, content="No recent complex tasks found to optimize.", agent="refiner")
             
@@ -51,23 +63,25 @@ class RefinerAgent(BaseAgent):
         log_text = "\n".join([f"- {r['content']}" for r in results])
         
         prompt = f"""
-You are the JARVIS Refiner Agent. Your goal is to write a single Python function that automates a repetitive task found in the user's recent execution history.
+You are the JARVIS Refiner Agent. Your goal is to write a single Python function that automates a repetitive calculation, data parsing, or text processing task found in the user's recent execution history.
 
 Recent Task History:
 {log_text}
 
-Instructions:
-1. Identify if there is a common multi-step task the user performs.
-2. If there is, write a complete Python function that automates this workflow using standard libraries (os, subprocess, requests, etc).
-3. The function must have a clear docstring.
-4. Output ONLY the raw Python code. Do not include markdown blocks like ```python. Do not include explanations.
+Security and Implementation Constraints:
+1. ONLY use allowed standard modules: math, datetime, re, json, collections, itertools, string, random, typing.
+2. DO NOT use os, pathlib, subprocess, requests, httpx, ctypes, socket, or any filesystem/network/process libraries.
+3. DO NOT use open(), eval(), exec(), compile(), __import__(), object, type, or reflection builtins.
+4. DO NOT use any dunder attributes, reflection, or introspection (e.g. __getattribute__, __setattr__, __class__, __subclasses__, __mro__, __globals__, __dict__).
+5. The function must have a clear docstring and type annotations.
+6. Output ONLY the raw Python code. Do not include markdown blocks like ```python. Do not include explanations.
 
 Example Output:
-def fetch_daily_briefing():
-    \"\"\"Fetches the top news and current weather.\"\"\"
-    import requests
-    # ... implementation
-    return "Briefing complete."
+def format_meeting_notes(raw_notes: str) -> dict:
+    \"\"\"Parses raw notes and extracts timestamps and action items.\"\"\"
+    import re
+    import datetime
+    return {{"summary": raw_notes[:100], "processed_at": str(datetime.datetime.now())}}
 """
         
         # 3. Use reasoning engine to generate code
@@ -84,19 +98,31 @@ def fetch_daily_briefing():
             return AgentResponse(success=True, content="Generated code lacked a valid function name.", agent="refiner")
             
         func_name = match.group(1)
-        filepath = os.path.join(self.custom_tools_dir, f"{func_name}.py")
         
-        # 5. Save the new tool!
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(generated_code)
-            
-        log.info(f"RefinerAgent successfully generated new tool: {func_name}")
+        # 5. Route through custom tool quarantine validation pipeline
+        from pathlib import Path
+        from core.brain.custom_tool_pipeline import process_and_register_generated_tool
+        custom_dir = Path(self.custom_tools_dir)
+        quarantine_dir = custom_dir / "_quarantine"
         
-        # 6. Dynamically reload tools in the active router
-        count = self.brain.tools.load_custom_tools(self.custom_tools_dir)
-        
+        success, report = process_and_register_generated_tool(
+            source_code=generated_code,
+            tool_router=self.brain.tools,
+            custom_dir=custom_dir,
+            quarantine_dir=quarantine_dir
+        )
+
+        if not success:
+            return AgentResponse(
+                success=False,
+                content=f"Generated tool '{func_name}' failed validation and was quarantined: {report}",
+                agent="refiner"
+            )
+
+        log.info(f"RefinerAgent successfully generated and validated new tool: {func_name}")
         return AgentResponse(
             success=True, 
-            content=f"Successfully analyzed memory and generated 1 new tool: {func_name}.py. Registered {count} total custom tools.",
+            content=f"Successfully analyzed memory and validated new tool: {func_name}.py. {report}",
             agent="refiner"
         )
+
