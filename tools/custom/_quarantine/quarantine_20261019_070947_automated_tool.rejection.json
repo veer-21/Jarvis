@@ -1,0 +1,6 @@
+{
+  "function_name": "automated_tool",
+  "rejected_at": "2026-10-19T07:09:47.386015+00:00",
+  "reason": "Tool contract violation: Function 'automated_tool' lacks a descriptive docstring.",
+  "file": "quarantine_20261019_070947_automated_tool.py.quarantine"
+}

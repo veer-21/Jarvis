@@ -1,0 +1,6 @@
+{
+  "function_name": "get_site",
+  "rejected_at": "2026-10-08T16:26:07.542487+00:00",
+  "reason": "Security violation: module 'requests' is not in the allowed import list (['collections', 'datetime', 'itertools', 'json', 'math', 'random', 're', 'string', 'typing']).",
+  "file": "quarantine_20261008_162607_get_site.py.quarantine"
+}

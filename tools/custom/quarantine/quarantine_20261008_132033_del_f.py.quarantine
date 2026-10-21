@@ -1,0 +1,4 @@
+import os
+def del_f():
+    '''del'''
+    os.remove('file.txt')

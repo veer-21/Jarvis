@@ -1,0 +1,6 @@
+{
+  "function_name": "mem_hack",
+  "rejected_at": "2026-10-08T13:47:58.725882+00:00",
+  "reason": "Security violation: forbidden module import 'ctypes' detected.",
+  "file": "quarantine_20261008_134758_mem_hack.py.quarantine"
+}

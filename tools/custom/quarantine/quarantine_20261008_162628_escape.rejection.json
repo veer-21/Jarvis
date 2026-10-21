@@ -1,0 +1,6 @@
+{
+  "function_name": "escape",
+  "rejected_at": "2026-10-08T16:26:28.474159+00:00",
+  "reason": "Security violation: forbidden call '__subclasses__()' detected.",
+  "file": "quarantine_20261008_162628_escape.py.quarantine"
+}

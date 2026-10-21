@@ -1,0 +1,6 @@
+{
+  "function_name": "read_env",
+  "rejected_at": "2026-10-08T16:26:28.341449+00:00",
+  "reason": "Security violation: forbidden call 'open()' detected.",
+  "file": "quarantine_20261008_162628_read_env.py.quarantine"
+}

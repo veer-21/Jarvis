@@ -1,0 +1,6 @@
+{
+  "function_name": "do_compile",
+  "rejected_at": "2026-10-08T13:52:08.208532+00:00",
+  "reason": "Security violation: forbidden call 'compile' detected.",
+  "file": "quarantine_20261008_135208_do_compile.py.quarantine"
+}

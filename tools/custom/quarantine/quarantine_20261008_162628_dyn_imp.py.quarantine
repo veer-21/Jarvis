@@ -1,0 +1,4 @@
+import importlib
+def dyn_imp():
+    '''imp'''
+    return importlib.import_module('os')

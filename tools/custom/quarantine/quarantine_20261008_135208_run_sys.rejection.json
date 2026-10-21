@@ -1,0 +1,6 @@
+{
+  "function_name": "run_sys",
+  "rejected_at": "2026-10-08T13:52:08.175031+00:00",
+  "reason": "Security violation: forbidden operation 'system' detected.",
+  "file": "quarantine_20261008_135208_run_sys.py.quarantine"
+}

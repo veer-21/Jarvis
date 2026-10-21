@@ -1,0 +1,3 @@
+def do_eval(expr: str):
+    '''eval'''
+    return eval(expr)

@@ -1,0 +1,4 @@
+def dyn_call():
+    '''dyn'''
+    import importlib
+    return importlib.import_module('math')

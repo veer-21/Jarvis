@@ -1,0 +1,4 @@
+import os
+def unl_f():
+    '''unl'''
+    os.unlink('file.txt')

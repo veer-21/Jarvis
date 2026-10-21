@@ -30,11 +30,14 @@ except ImportError:
     log.warning("beautifulsoup4 not installed. Run: pip install beautifulsoup4")
 
 try:
-    from duckduckgo_search import DDGS
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        from duckduckgo_search import DDGS
     HAS_DDGS = True
 except ImportError:
     HAS_DDGS = False
-    log.warning("duckduckgo-search not installed. Run: pip install duckduckgo-search")
+    log.warning("ddgs / duckduckgo-search not installed. Run: pip install ddgs")
 
 
 # ─── Shared Session ──────────────────────────────────────────────────────────
@@ -70,10 +73,7 @@ def web_search(query: str, max_results: int = 5) -> str:
 
     log.info(f"Web search: {query}")
     try:
-        results = []
-        with DDGS() as ddgs:
-            for r in ddgs.text(query, max_results=min(max_results, 10)):
-                results.append(r)
+        results = list(DDGS().text(query, max_results=min(max_results, 10)))
 
         if not results:
             return f"No results found for: '{query}'"
@@ -192,10 +192,7 @@ def search_news(query: str, max_results: int = 5) -> str:
 
     log.info(f"News search: {query}")
     try:
-        results = []
-        with DDGS() as ddgs:
-            for r in ddgs.news(query, max_results=min(max_results, 10)):
-                results.append(r)
+        results = list(DDGS().news(query, max_results=min(max_results, 10)))
 
         if not results:
             return f"No news found for: '{query}'"

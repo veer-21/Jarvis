@@ -1,0 +1,6 @@
+{
+  "function_name": "do_eval",
+  "rejected_at": "2026-10-08T13:57:57.801617+00:00",
+  "reason": "Security violation: forbidden call 'eval' detected.",
+  "file": "quarantine_20261008_135757_do_eval.py.quarantine"
+}

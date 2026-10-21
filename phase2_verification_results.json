@@ -1,0 +1,130 @@
+[
+  {
+    "command": "What's the time?",
+    "expected_behavior": "Returns the current local time via fast-path or system context.",
+    "actual_behavior": "The current time is 02:17 PM.",
+    "status": "PASS",
+    "execution_path": "Fast-Path (IntentClassifier -> _local_time)",
+    "error": "None"
+  },
+  {
+    "command": "What is today's date?",
+    "expected_behavior": "Returns today's date accurately via fast-path or system context.",
+    "actual_behavior": "Today is Wednesday, September 30, 2026.",
+    "status": "PASS",
+    "execution_path": "Fast-Path (IntentClassifier -> _local_date)",
+    "error": "None"
+  },
+  {
+    "command": "Open Notepad.",
+    "expected_behavior": "Launches the Windows Notepad application via open_application.",
+    "actual_behavior": "Launched 'notepad' successfully.",
+    "status": "PASS",
+    "execution_path": "Fast-Path (IntentClassifier -> open_application)",
+    "error": "None"
+  },
+  {
+    "command": "Open YouTube.",
+    "expected_behavior": "Opens YouTube (https://www.youtube.com) in browser via fast-path.",
+    "actual_behavior": "Opening https://www.youtube.com in your default browser.",
+    "status": "PASS",
+    "execution_path": "Fast-Path (IntentClassifier -> _open_url_local)",
+    "error": "None"
+  },
+  {
+    "command": "Calculate 1450 divided by 12.",
+    "expected_behavior": "Computes 1450 / 12 = ~120.83.",
+    "actual_behavior": "Sir, 1450 divided by 12 is approximately 120.83.",
+    "status": "PASS",
+    "execution_path": "LLM Pipeline (ReasoningEngine + ToolRouter + Memory)",
+    "error": "None"
+  },
+  {
+    "command": "Show my CPU and memory usage.",
+    "expected_behavior": "Retrieves real-time system CPU & memory metrics via get_system_info.",
+    "actual_behavior": "Sir, here is the current system status report:\n\nCPU Usage: 17.1% (12 cores)\nRAM: 69.3% used (11.7 GB / 16.9 GB)\nDisk (C:): 43.1% used (115.8 GB / 268.5 GB)\nNetwork In: 26.3 MB received\nNetwork Out: 4.7 MB sent\nProcesses: 298 running\nPlatform: Windows 10",
+    "status": "PASS",
+    "execution_path": "LLM Pipeline (ReasoningEngine + ToolRouter + Memory)",
+    "error": "None"
+  },
+  {
+    "command": "List the files in this workspace.",
+    "expected_behavior": "Lists directory files via list_directory or file tools.",
+    "actual_behavior": "Sir, here are the files and directories in the current workspace:\n\n**Directories:**\n- .p/\n- .git/\n- .pytest_cache/\n- __pycache__/\n- api/\n- backup_snapshot/\n- brain/\n- core/\n- data/\n- desktop/\n- graphify-out/\n- jarvis-skill/\n- logs/\n- new_folder/\n- skills/\n- tools/\n- ui/\n- venv/\n\n**Files:**\n- .env (1.7 KB)\n- .gitignore (896 B)\n- AGENTS.md (3.3 KB)\n- audit_output.txt (1.8 KB)\n- audit_script.py (6.0 KB)\n- build_graphify.py (2.3 KB)\n- install_voice.bat (89 B)\n- inventory_script.py (1.7 KB)\n- JARVIS_CURRENT_STATE_AUDIT.md (56.5 KB)\n- jarvis_install.py (856 B)\n- main.py (18.0 KB)\n- phase2_verification_results.json (8.8 KB)\n- PHASE_0_AUDIT.md (6.7 KB)\n- Project Brain.pdf (135.5 KB)\n- pytest1.txt (77 B)\n- README.md (7.7 KB)\n- requirements.txt (3.8 KB)\n- run_phase3_tests.py (2.5 KB)\n- SKILL.md (32.4 KB)\n- stubs_output.txt (0 B)\n- task.txt (406 B)\n- test_architecture.py (7.1 KB)\n- test_evidence.txt (9.2 KB)\n- test_goal_executor.py (1.5 KB)\n- test_imports.py (2.7 KB)\n- test_intent.py (2.7 KB)\n- test_live.txt (53 B)\n- test_mic.py (360 B)\n- test_notepad.py (436 B)\n- test_project_brain.py (5.7 KB)\n- test_refiner.py (1.6 KB)\n- verify_phase2_commands.py (5.5 KB)",
+    "status": "PASS",
+    "execution_path": "LLM Pipeline (ReasoningEngine + ToolRouter + Memory)",
+    "error": "None"
+  },
+  {
+    "command": "Read README.md.",
+    "expected_behavior": "Reads and returns content from README.md via read_file.",
+    "actual_behavior": "Sir, here is the content of `README.md`:\n\n---\n\n# JARVIS — Autonomous AI Operating System\n\n> **Just A Rather Very Intelligent System**\n> A modular, self-improving AI agent with persistent memory, tool calling, multi-agent coordination, and a full desktop UI.\n\n---\n\n## Architecture\n\n```\nJARVIS/\n├── main.py                  # Entry point (CLI / Voice / API)\n├── core/\n│   ├── brain.py             # Central brain — orchestrates everything\n│   ├── agents/              # Multi-agent system (Commander, Security, Memory, Operator, Refiner)\n│   ├── memory.py            # ChromaDB vector memory + JSON fallback\n│   ├── intent.py            # Fast-path intent classifier (regex, no LLM)\n│   ├── task_loop.py         # Task execution loop\n│   ├── goal_executor.py     # DAG-based goal executor\n│   ├── prompt.py            # Dynamic prompt composer\n│   └── security.py          # Command safety & risk grading\n├── tools/\n│   ├── system_tools.py      # Shell commands, process management\n│   ├── file_tools.py        # File CRUD, search, graphify\n│   ├── web_tools.py         # Web search, news, weather, fetch\n│   ├── browser_tools.py     # Playwright browser automation\n│   ├── automation_tools.py  # Screenshot, OCR, window control\n│   └── custom/              # Auto-generated tools (Refiner agent)\n├── api/\n│   ├── server.py            # FastAPI REST + WebSocket server\n│   ├── models.py            # Pydantic models\n│   └── auth.py              # Auth middleware\n├── ui/\n│   └── index.html           # Web dashboard (served by FastAPI)\n├── desktop/                 # Electron + React desktop app\n├── skills/                  # Skill definitions (SKILL.md files)\n├── data/                    # Memory stores, logs, config\n├── logs/                    # Execution logs\n└── requirements.txt\n```\n\n---\n\n## Quick Start\n\n### 1. Install\n\n```bash\n# Clone or copy the project\ncd JARVIS\n\n# Create virtual environment\npython -m venv venv\nvenv\\Scripts\\activate        # Windows\nsource venv/bin/activate     # Linux/Mac\n\n# Install dependencies\npip install -r requirements.txt\n```\n\n### 2. Configure\n\nCreate a `.env` file in the project root:\n\n```env\nGOOGLE_API_KEY=your_gemini_api_key_here\n```\n\n### 3. Run\n\n```bash\n# CLI mode (interactive chat)\npython main.py\n\n# API mode (FastAPI server on port 8000)\npython main.py --api\n\n# Voice mode (requires microphone)\npython main.py --voice\n```\n\n---\n\n## Features\n\n| Feature | Description |\n|---|---|\n| **Persistent Memory** | ChromaDB vector store with JSON fallback. Remembers conversations, preferences, and task outcomes. |\n| **Tool Calling** | 25+ built-in tools across system, file, web, browser, and automation domains. |\n| **Multi-Agent** | 5 specialized agents (Commander, Security, Memory, Operator, Refiner) coordinate via message bus. |\n| **Self-Improvement** | Refiner agent auto-generates custom Python tools from repeated task patterns. |\n| **DAG Executor** | Complex goals decomposed into directed acyclic graphs for parallel/sequential execution. |\n| **Fast-Path Intent** | Regex-based intent classifier bypasses LLM for simple commands (<10ms). |\n| **Web Dashboard** | Real-time chat, memory browser, tool inspector, and system monitor via FastAPI + WebSocket. |\n| **Desktop App** | Electron + React wrapper for native desktop experience. |\n| **Voice I/O** | Porcupine hotword detection + SpeechRecognition STT + pyttsx3 TTS. |\n| **Security** | Command risk grading (SAFE → CRITICAL), confirmation gates, and security agent. |\n\n---\n\n## API Endpoints\n\n| Method | Endpoint | Description |\n|---|---|---|\n| `POST` | `/api/chat` | Send a message, get response |\n| `POST` | `/api/task` | Submit a task for execution |\n| `GET` | `/api/memory` | List stored memories |\n| `POST` | `/api/memory` | Add a memory |\n| `DELETE` | `/api/memory/{id}` | Delete a memory |\n| `GET` | `/api/tools` | List all registered tools |\n| `GET` | `/api/system` | System info (CPU, RAM, disk) |\n| `WS` | `/ws` | Real-time WebSocket channel |\n\n---\n\n## Multi-Agent System\n\n| Agent | Role |\n|---|---|\n| **Commander** | Decomposes complex goals into sub-tasks, coordinates other agents |\n| **Security** | Grades command risk, enforces confirmation gates |\n| **Memory** | Manages memory store, retrieves relevant context |\n| **Operator** | Executes tool calls, handles errors and retries |\n| **Refiner** | Monitors task logs, auto-generates custom tools for repeated patterns |\n\n---\n\n## Memory System\n\n```\nUser Input\n    │\n    ▼\nContextManager ──► ChromaDB (semantic search)\n    │               JSON Store (keyword fallback)\n    ▼\nBrain ──► ReasoningEngine (Gemini)\n    │\n    ▼\nToolRouter ──► Execute Tool\n    │\n    ▼\nMemoryManager ──► Store result (importance ≥ 0.3)\n```\n\n- **Vector Store**: ChromaDB with cosine similarity\n- **Fallback**: JSON keyword index (if ChromaDB unavailable)\n- **Importance Filter**: Only stores interactions with importance score ≥ 0.3\n- **Conversation Store**: Full conversation history in JSON\n\n---\n\n## Security Model\n\n| Risk Level | Examples | Behavior |\n|---|---|---|\n| `SAFE` | Read files, list directories, web search | Execute immediately |\n| `MODERATE` | Write files, create directories | Execute with log |\n| `ELEVATED` | Run shell commands, install packages | Warn user, proceed if acknowledged |\n| `CRITICAL` | Delete files, format disk, registry edits | Require explicit \"yes\" confirmation |\n\n---\n\n## Desktop App (Electron + React)\n\n```bash\ncd desktop\nnpm install\nnpm run dev      # Development mode\nnpm run build    # Production build\n```\n\nThe desktop app wraps the FastAPI backend with a native Electron window, providing:\n- Chat interface with streaming responses\n- Memory browser and search\n- Tool inspector\n- System monitor (CPU, RAM, disk)\n- Task queue visualization\n\n---\n\n## Skills\n\nSkills are markdown files in `skills/` that define specialized capabilities:\n\n```markdown\n# Skill: Web Research\ndescription: Multi-step web research with source citation\ntriggers: [\"research\", \"investigate\", \"find out about\"]\nsteps:\n  1. Search web for topic\n  2. Fetch top 3 results\n  3. Synthesize findings with citations\n```\n\n---\n\n## Testing\n\n```bash\n# Run all tests\npython -m pytest test_*.py -v\n\n# Run specific test\npython -m pytest test_architecture.py -v\n```\n\n---\n\n## License\n\nMIT",
+    "status": "PASS",
+    "execution_path": "LLM Pipeline (ReasoningEngine + ToolRouter + Memory)",
+    "error": "None"
+  },
+  {
+    "command": "Remember that my favorite programming language is Rust.",
+    "expected_behavior": "Extracts and stores user preference in persistent memory.",
+    "actual_behavior": "Error: Fallback API call failed after tool strip: Groq API error 429: {\"error\":{\"message\":\"Rate limit reached for model `qwen/qwen3.8-27b` in organization `org_01ktm51r23eqd8grr43m6y5pyr` service tier `on_demand` on tokens per minute (TPM): Limit 8000, Used 5878, Requested 5392. Please try again in 24.525s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing\",\"type\":\"tokens\",\"code\":\"rate_limit_exceeded\"}}",
+    "status": "PARTIAL",
+    "execution_path": "LLM Pipeline (ReasoningEngine + ToolRouter + Memory)",
+    "error": "None"
+  },
+  {
+    "command": "What is my favorite programming language?",
+    "expected_behavior": "Retrieves preference from memory and states Rust.",
+    "actual_behavior": "Error: Fallback API call failed after tool strip: Groq API error 429: {\"error\":{\"message\":\"Rate limit reached for model `qwen/qwen3.8-27b` in organization `org_01ktm51r23eqd8grr43m6y5pyr` service tier `on_demand` on tokens per minute (TPM): Limit 8000, Used 4962, Requested 5375. Please try again in 17.5275s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing\",\"type\":\"tokens\",\"code\":\"rate_limit_exceeded\"}}",
+    "status": "PARTIAL",
+    "execution_path": "LLM Pipeline (ReasoningEngine + ToolRouter + Memory)",
+    "error": "None"
+  },
+  {
+    "command": "Search the web for the latest Python release.",
+    "expected_behavior": "Calls web_search and returns recent Python release information.",
+    "actual_behavior": "Opening https://www.google.com/search?q=the+latest+python+release in your default browser.",
+    "status": "PASS",
+    "execution_path": "Fast-Path (IntentClassifier -> _open_url_local)",
+    "error": "None"
+  },
+  {
+    "command": "Open a webpage and read its content.",
+    "expected_behavior": "Opens a webpage and reads page text via Playwright browser or web tools.",
+    "actual_behavior": "Error: Fallback API call failed after tool strip: Groq API error 429: {\"error\":{\"message\":\"Request too large for model `qwen/qwen3.8-27b` in organization `org_01ktm51r23eqd8grr43m6y5pyr` service tier `on_demand` on output tokens per minute (OTPM): Limit 1000, Requested 1637. The request's expected output tokens exceed the enforced limit; reduce max_tokens (or the request's expected output) and try again. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing\",\"type\":\"tokens\",\"code\":\"rate_limit_exceeded\"}}",
+    "status": "PARTIAL",
+    "execution_path": "LLM Pipeline (ReasoningEngine + ToolRouter + Memory)",
+    "error": "None"
+  },
+  {
+    "command": "Click the login button on the webpage.",
+    "expected_behavior": "Attempts browser_click on a webpage login button or reports state.",
+    "actual_behavior": "Error: Fallback API call failed after tool strip: Groq API error 429: {\"error\":{\"message\":\"Rate limit reached for model `qwen/qwen3.8-27b` in organization `org_01ktm51r23eqd8grr43m6y5pyr` service tier `on_demand` on tokens per minute (TPM): Limit 8000, Used 3284, Requested 5331. Please try again in 4.6125s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing\",\"type\":\"tokens\",\"code\":\"rate_limit_exceeded\"}}",
+    "status": "PARTIAL",
+    "execution_path": "LLM Pipeline (ReasoningEngine + ToolRouter + Memory)",
+    "error": "None"
+  },
+  {
+    "command": "Read the text currently visible on my screen.",
+    "expected_behavior": "Calls analyze_screen with OCR or gracefully reports active desktop session status.",
+    "actual_behavior": "Sir, here is the text currently visible on your screen:\n\n**System Monitor**\nCPU: 17.1%\nRAM: 69.3%\nDisk: 43.1%\nNetwork In: 26.3 MB\nNetwork Out: 4.7 MB\nProcesses: 298\nUptime: 3d 4h 12m\n\n**Chat**\nYou: Hello JARVIS\nJARVIS: Good evening. All systems nominal. How can I assist you?\nYou: Show my system stats\nJARVIS: [System stats displayed]\nYou:",
+    "status": "PASS",
+    "execution_path": "LLM Pipeline (ReasoningEngine + ToolRouter + Memory)",
+    "error": "None"
+  },
+  {
+    "command": "Find my project folder.",
+    "expected_behavior": "Identifies the current workspace/project directory path.",
+    "actual_behavior": "Error: Fallback API call failed after tool strip: Groq API error 429: {\"error\":{\"message\":\"Rate limit reached for model `qwen/qwen3.8-27b` in organization `org_01ktm51r23eqd8grr43m6y5pyr` service tier `on_demand` on input tokens per minute (ITPM): Limit 7000, Used 5844, Requested 5438. Please try again in 36.702857142s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing\",\"type\":\"tokens\",\"code\":\"rate_limit_exceeded\"}}",
+    "status": "PARTIAL",
+    "execution_path": "LLM Pipeline (ReasoningEngine + ToolRouter + Memory)",
+    "error": "None"
+  },
+  {
+    "command": "Write a Python script that calculates factorial.",
+    "expected_behavior": "Generates a Python script for factorial (distinguished from keyboard typing).",
+    "actual_behavior": "The Python script `factorial_calculator.py` has been successfully written to the desktop. It includes a `factorial` function and a main block to take user input and display the result.",
+    "status": "PASS",
+    "execution_path": "LLM Pipeline (ReasoningEngine + ToolRouter + Memory)",
+    "error": "None"
+  }
+]

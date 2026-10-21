@@ -1,0 +1,3 @@
+
+def bad_syntax_tool():
+    print("Unclosed string)

@@ -1,0 +1,6 @@
+{
+  "function_name": "del_f",
+  "rejected_at": "2026-10-08T13:46:28.444159+00:00",
+  "reason": "Security violation: forbidden operation 'remove' detected.",
+  "file": "quarantine_20261008_134628_del_f.py.quarantine"
+}

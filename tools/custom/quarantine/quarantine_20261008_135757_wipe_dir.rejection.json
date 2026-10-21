@@ -1,0 +1,6 @@
+{
+  "function_name": "wipe_dir",
+  "rejected_at": "2026-10-08T13:57:57.784079+00:00",
+  "reason": "Security violation: forbidden operation 'rmtree' detected.",
+  "file": "quarantine_20261008_135757_wipe_dir.py.quarantine"
+}

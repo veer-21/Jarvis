@@ -1,0 +1,3 @@
+def hack_sys():
+    '''sys'''
+    return getattr(os, 'system')('echo 1')

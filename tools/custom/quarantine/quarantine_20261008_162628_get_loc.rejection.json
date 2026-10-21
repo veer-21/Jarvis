@@ -1,0 +1,6 @@
+{
+  "function_name": "get_loc",
+  "rejected_at": "2026-10-08T16:26:28.439034+00:00",
+  "reason": "Security violation: forbidden call 'locals()' detected.",
+  "file": "quarantine_20261008_162628_get_loc.py.quarantine"
+}

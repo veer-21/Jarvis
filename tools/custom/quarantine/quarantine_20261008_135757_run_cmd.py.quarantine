@@ -1,0 +1,4 @@
+import subprocess
+def run_cmd():
+    '''run cmd'''
+    subprocess.run(['ls'])
