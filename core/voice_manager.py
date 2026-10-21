@@ -35,6 +35,7 @@ class ContinuousVoiceManager:
         
         # Interruption support
         self.interrupt_event = threading.Event()
+        self.active_session_id: Optional[str] = None  # Tracks owning session for voice playback
 
         # Active Conversation Session Memory
         self.recent_commands = []
@@ -63,6 +64,28 @@ class ContinuousVoiceManager:
         self.voice.cleanup()
         log.info(f"[VoiceManager] Stopped. Stats: {self._stats}")
 
+    def stop_speaking_for_session(self, session_id: Optional[str] = None) -> bool:
+        """
+        Voice Playback Owner Policy:
+        Stops active voice playback only if:
+        1. An authenticated session initiates the call, AND
+        2. Either no specific session is bound to playback (global continuous voice),
+           OR the caller's session matches self.active_session_id.
+        Unrelated or unauthenticated sessions are unauthorized to stop voice playback.
+        """
+        if not session_id:
+            return False
+        if self.active_session_id is not None and self.active_session_id != session_id:
+            log.warning(f"[VoiceManager] Session {session_id} attempted unauthorized voice stop for active session {self.active_session_id}")
+            return False
+        try:
+            self.voice.stop_speaking()
+            self.active_session_id = None
+            return True
+        except Exception as e:
+            log.debug(f"[VoiceManager] Voice stop speaking notice: {e}")
+            return False
+
     def _broadcast_metrics(self, metrics: dict):
         """Broadcast latency metrics to the WebSocket UI."""
         try:
@@ -89,23 +112,6 @@ class ContinuousVoiceManager:
 
     def _listen_loop(self):
         """The main continuous loop."""
-        
-        def _barge_in_watcher():
-            while self.is_running:
-                if self.voice._speaking:
-                    # If Porcupine triggers during speech, it's a barge-in!
-                    if self.voice.listen_for_wake_word():
-                        log.info("[🔔 Barge-in Detected!] Interrupting TTS.")
-                        self.interrupt_event.set()
-                        # Wait for speaking to stop before resetting
-                        time.sleep(0.5) 
-                        self.interrupt_event.clear()
-                else:
-                    time.sleep(0.1)
-                    
-        barge_in_thread = threading.Thread(target=_barge_in_watcher, daemon=True)
-        barge_in_thread.start()
-
         while self.is_running:
             try:
                 self.interrupt_event.clear()
@@ -128,6 +134,8 @@ class ContinuousVoiceManager:
 
                 # ── 2. Listen for actual command ─────────────────────────────
                 self._set_ui_status("LISTENING")
+                if self.brain and self.recent_commands:
+                    self.brain.context.start_prefetch(self.recent_commands[-1])
 
                 command = self.voice.listen(wait_for_wake_word=False, interrupt_event=self.interrupt_event)
 
@@ -148,69 +156,20 @@ class ContinuousVoiceManager:
                 
                 self._broadcast_metrics(metrics)
 
-                # ── 3. Try local intent classification FIRST ─────────────────
+                # ── 3. Route via Central Assistant Core (AssistantOrchestrator) ──
                 self._set_ui_status("THINKING")
-
-                local_match = self.intent_classifier.classify(command)
-                if local_match:
-                    tool_name, tool_args = local_match
-                    self._stats["local_commands"] += 1
-
-                    # Check for built-in local functions (time, date, etc.)
-                    local_result = IntentClassifier.execute_local(tool_name, tool_args)
-                    if local_result is not None:
-                        t_total = (time.perf_counter() - t_pipeline_start) * 1000
-                        log.info(f"[VOICE] LOCAL BUILTIN: {t_total:.0f}ms | \"{command}\" → {tool_name}")
-                        self._set_ui_status("SPEAKING")
-                        
-                        # Use new stream API even for local strings
-                        def str_gen(text): yield text
-                        self.voice.speak_stream(str_gen(local_result), self.interrupt_event)
-                        continue
-
-                    # Execute via Brain's ToolRouter
-                    if self.brain:
-                        t_exec = time.perf_counter()
-                        result = self.brain.tools.execute_tool(
-                            tool_name, tool_args, interactive=False
-                        )
-                        t_exec_ms = (time.perf_counter() - t_exec) * 1000
-
-                        if result["success"]:
-                            response = str(result["result"])
-                        else:
-                            response = f"Command failed: {result.get('error', 'Unknown')}"
-
-                        t_total = (time.perf_counter() - t_pipeline_start) * 1000
-                        log.info(f"[VOICE] LOCAL TOOL: exec={t_exec_ms:.0f}ms total={t_total:.0f}ms | \"{command}\" → {tool_name}")
-                        
-                        self._set_ui_status("SPEAKING")
-                        def str_gen(text): yield text
-                        self.voice.speak_stream(str_gen(response), self.interrupt_event)
-                    continue
-
-                # ── 4. Route to Brain (LLM) for complex queries ──────────────
                 self._stats["llm_routes"] += 1
 
                 if self.brain:
-                    # Inject short term memory context
-                    context_prefix = ""
-                    if len(self.recent_commands) > 1:
-                        context_prefix = f"[Active Conversation Memory: You just asked: '{self.recent_commands[-2]}']\n"
-                    
-                    full_command = context_prefix + command
-                    
                     t_llm = time.perf_counter()
-                    
-                    # We get a generator back
-                    response_generator = self.brain.process_input_stream(full_command)
-                    
+                    # Unified streaming cognitive pipeline
+                    response_generator = self.brain.process_input_stream(command, interrupt_event=self.interrupt_event)
                     self._set_ui_status("SPEAKING")
                     
-                    # Wrap the generator to measure llm_time_to_first_token
-                    def metrics_wrapped_generator(gen):
+                    # Wrap the async generator to measure llm_time_to_first_token
+                    async def metrics_wrapped_generator(gen):
                         first_token = True
-                        for chunk in gen:
+                        async for chunk in gen:
                             if first_token:
                                 llm_ms = (time.perf_counter() - t_llm) * 1000
                                 metrics['llm_time_to_first_token'] = llm_ms

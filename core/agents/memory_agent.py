@@ -22,7 +22,7 @@ class MemoryAgent(BaseAgent):
         super().__init__("memory", AgentRole.MEMORY)
         self._memory = memory
         self._brain_send = brain_send  # Function to call LLM for summarization
-        self._unsummarized_turns = 0
+        self._unsummarized_turns: dict[tuple[str, Optional[str]], int] = {}
 
     def set_memory(self, memory) -> None:
         self._memory = memory
@@ -50,7 +50,7 @@ class MemoryAgent(BaseAgent):
         elif action == "summarize":
             return self._handle_summarize(message)
         elif action == "check_summarize":
-            return self._check_auto_summarize()
+            return self._check_auto_summarize(message)
         elif action == "update_project_brain":
             return self._handle_project_brain_update(message)
         else:
@@ -71,9 +71,19 @@ class MemoryAgent(BaseAgent):
         if not self._brain_send:
             return AgentResponse(success=False, content="No brain send handler configured", agent=self.name)
 
+        user_id = message.user_id
+        is_system = getattr(message, "system_authorized", False)
+        if not user_id and not is_system:
+            return AgentResponse(
+                success=False,
+                content="Project Brain update requires verified user ownership or explicit system authorization.",
+                agent=self.name,
+                error="UNAUTHORIZED_MISSING_OWNER"
+            )
+
         try:
-            # 1. Fetch recent task results from task memory
-            tasks = self._memory.retrieve_memories("Task", category="task", top_k=10)
+            # 1. Fetch recent task results from task memory scoped to owner
+            tasks = self._memory.retrieve_memories("Task", category="task", top_k=10, user_id=user_id, allow_system_scope=is_system)
             if not tasks:
                 return AgentResponse(
                     success=True,
@@ -161,12 +171,22 @@ class MemoryAgent(BaseAgent):
             )
 
     def _handle_store(self, message: AgentMessage) -> AgentResponse:
-        """Store content in memory."""
+        """Store content in memory scoped to authenticated owner (P0-1, P0-3)."""
         if not self._memory:
             return AgentResponse(success=False, content="No memory system", agent=self.name)
 
+        user_id = message.user_id
+        is_system = getattr(message, "system_authorized", False)
+        if not user_id and not is_system:
+            return AgentResponse(
+                success=False,
+                content="Memory store requires verified user ownership.",
+                agent=self.name,
+                error="UNAUTHORIZED_MISSING_OWNER"
+            )
+
         category = message.metadata.get("category", "knowledge")
-        doc_id = self._memory.store_memory(message.content, category=category)
+        doc_id = self._memory.store_memory(message.content, category=category, user_id=user_id)
         return AgentResponse(
             success=True,
             content=f"Stored in {category} memory",
@@ -175,31 +195,65 @@ class MemoryAgent(BaseAgent):
         )
 
     def _handle_retrieve(self, message: AgentMessage) -> AgentResponse:
-        """Retrieve relevant memories."""
+        """Retrieve relevant memories strictly scoped to owner (P0-1, P0-3)."""
         if not self._memory:
             return AgentResponse(success=False, content="No memory system", agent=self.name)
+
+        user_id = message.user_id
+        session_id = message.session_id
+        is_system = getattr(message, "system_authorized", False)
+        if not user_id and not is_system:
+            return AgentResponse(
+                success=False,
+                content="",
+                agent=self.name,
+                error="UNAUTHORIZED_MISSING_OWNER"
+            )
 
         memories = self._memory.retrieve_memories(
             message.content,
             top_k=message.metadata.get("top_k", 5),
+            user_id=user_id,
+            allow_system_scope=is_system,
         )
-        context = self._memory.build_context_snippet(message.content)
+        context = self._memory.build_context_snippet(
+            message.content,
+            user_id=user_id,
+            session_id=session_id,
+            allow_system_scope=is_system,
+        )
         return AgentResponse(
             success=True,
             content=context,
             agent=self.name,
-            metadata={"count": len(memories)},
+            metadata={"count": len(memories), "memories": memories},
         )
 
     def _handle_summarize(self, message: AgentMessage) -> AgentResponse:
-        """Create an episodic summary from recent conversation."""
+        """Create an episodic summary from recent conversation scoped to owner (P0-1, P0-3, P1-3)."""
         if not self._memory:
             return AgentResponse(success=False, content="No memory system", agent=self.name)
 
+        user_id = message.user_id
+        session_id = message.session_id
+        is_system = getattr(message, "system_authorized", False)
+        if not user_id and not is_system:
+            return AgentResponse(
+                success=False,
+                content="Episodic summary requires verified user ownership.",
+                agent=self.name,
+                error="UNAUTHORIZED_MISSING_OWNER"
+            )
+
         summary = message.content
         if not summary and self._brain_send:
-            # Auto-generate summary from recent conversation
-            recent = self._memory.conversations.get_context_string(n=self.SUMMARIZE_THRESHOLD)
+            # Auto-generate summary from recent conversation scoped to owner
+            recent = self._memory.conversations.get_context_string(
+                n=self.SUMMARIZE_THRESHOLD,
+                session_id=session_id,
+                user_id=user_id,
+                allow_system_scope=is_system,
+            )
             if recent:
                 prompt = (
                     "Summarize this conversation in 2-3 sentences. "
@@ -209,32 +263,63 @@ class MemoryAgent(BaseAgent):
                 try:
                     summary = self._brain_send(prompt)
                 except Exception as e:
-                    summary = f"Conversation block ({self._unsummarized_turns} turns)"
+                    key = (user_id, session_id)
+                    turns = self._unsummarized_turns.get(key, self.SUMMARIZE_THRESHOLD)
+                    summary = f"Conversation block ({turns} turns)"
 
         if summary:
-            self._memory.create_episode_summary(summary)
-            self._unsummarized_turns = 0
+            self._memory.create_episode_summary(summary, user_id=user_id, session_id=session_id)
+            if user_id:
+                self._unsummarized_turns[(user_id, session_id)] = 0
             return AgentResponse(success=True, content=summary, agent=self.name)
 
         return AgentResponse(success=False, content="Nothing to summarize", agent=self.name)
 
-    def _check_auto_summarize(self) -> AgentResponse:
-        """Check if enough unsummarized turns have accumulated."""
-        self._unsummarized_turns += 1
-        if self._unsummarized_turns >= self.SUMMARIZE_THRESHOLD:
-            return self._handle_summarize(AgentMessage(
+    def _check_auto_summarize(self, message: AgentMessage) -> AgentResponse:
+        """Check if enough unsummarized turns have accumulated for caller (P1-3)."""
+        user_id = message.user_id
+        session_id = message.session_id
+        is_system = getattr(message, "system_authorized", False)
+
+        if not user_id and not is_system:
+            return AgentResponse(
+                success=False,
+                content="Missing verified user identity for auto-summarization.",
+                agent=self.name,
+                error="UNAUTHORIZED_MISSING_OWNER"
+            )
+
+        key = (user_id, session_id)
+        self._unsummarized_turns[key] = self._unsummarized_turns.get(key, 0) + 1
+        count = self._unsummarized_turns[key]
+
+        if count >= self.SUMMARIZE_THRESHOLD:
+            summ_msg = AgentMessage(
                 sender=self.name,
                 recipient=self.name,
                 content="",
-                metadata={"action": "summarize"},
-            ))
+                user_id=user_id,
+                session_id=session_id,
+                system_authorized=is_system,
+                metadata={"action": "summarize", "user_id": user_id, "session_id": session_id},
+            )
+            res = self._handle_summarize(summ_msg)
+            if res.success:
+                self._unsummarized_turns[key] = 0
+            return res
+
         return AgentResponse(
             success=True,
-            content=f"Turns since last summary: {self._unsummarized_turns}",
+            content=f"Turns since last summary: {count}",
             agent=self.name,
+            metadata={"turns": count, "user_id": user_id, "session_id": session_id},
         )
 
     def handle_event(self, event: AgentMessage) -> None:
-        """Track conversation events for auto-summarization."""
+        """Track conversation events for auto-summarization scoped to owner (P1-3)."""
         if event.metadata.get("type") == "conversation_turn":
-            self._unsummarized_turns += 1
+            u_id = event.user_id
+            s_id = event.session_id
+            if u_id:
+                key = (u_id, s_id)
+                self._unsummarized_turns[key] = self._unsummarized_turns.get(key, 0) + 1

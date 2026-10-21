@@ -38,6 +38,64 @@ class AgentMessage:
     msg_id:     str = field(default_factory=lambda: str(uuid.uuid4())[:8])
     timestamp:  str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     reply_to:   Optional[str] = None     # msg_id of the message this replies to
+    user_id:    Optional[str] = None     # Verified authenticated owner identity (P0-1)
+    session_id: Optional[str] = None     # Verified session identity (P0-1)
+    system_authorized: bool = False      # Explicit trusted system-scope authorization (P0-1)
+
+    def __post_init__(self):
+        # 1. Identity safety: self.user_id is the canonical trusted identity attribute.
+        # NEVER elevate identity from metadata["user_id"] if self.user_id is None.
+        if self.user_id is not None:
+            # Enforce consistency: synchronize metadata with trusted self.user_id
+            self.metadata["user_id"] = self.user_id
+        else:
+            # If untrusted metadata contains user_id but self.user_id is None,
+            # do NOT elevate. Remove metadata["user_id"] so downstream
+            # components cannot be misled by untrusted metadata.
+            if "user_id" in self.metadata:
+                self.metadata.pop("user_id", None)
+
+        if self.session_id is not None:
+            self.metadata["session_id"] = self.session_id
+        else:
+            if "session_id" in self.metadata:
+                self.metadata.pop("session_id", None)
+
+        # 2. System authorization safety:
+        # A plain metadata["allow_system_scope"] = True must NEVER grant system privileges.
+        if not self.system_authorized:
+            if "allow_system_scope" in self.metadata:
+                self.metadata.pop("allow_system_scope", None)
+        else:
+            self.metadata["allow_system_scope"] = True
+
+
+def create_system_message(
+    sender: str,
+    recipient: str,
+    content: str,
+    msg_type: str = "request",
+    priority: MessagePriority = MessagePriority.NORMAL,
+    metadata: Optional[dict] = None,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> AgentMessage:
+    """
+    Factory for authorized internal system maintenance messages (P0-1).
+    Only trusted internal kernel/subsystem code may invoke this.
+    """
+    meta = metadata.copy() if metadata else {}
+    return AgentMessage(
+        sender=sender,
+        recipient=recipient,
+        content=content,
+        msg_type=msg_type,
+        priority=priority,
+        metadata=meta,
+        user_id=user_id,
+        session_id=session_id,
+        system_authorized=True,
+    )
 
 
 @dataclass

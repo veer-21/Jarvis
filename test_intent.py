@@ -10,17 +10,17 @@ tests = [
     # Local commands — should match
     ("open chrome",                   "open_application"),
     ("Open Notepad",                  "open_application"),
-    ("open YouTube",                  "open_url"),
+    ("open YouTube",                  "_open_url_local"),
     ("open vs code",                  "open_application"),
     ("open calculator",               "open_application"),
     ("take a screenshot",             "take_screenshot"),
     ("what time is it",               "_local_time"),
     ("can you open chrome please",    "open_application"),
     ("hey jarvis open notepad",       "open_application"),
-    ("search for python tutorials",   "open_url"),
+    ("search for python tutorials",   "_open_url_local"),
     ("volume up",                     "press_key"),
-    ("open Google",                   "open_url"),
-    ("open Gmail",                    "open_url"),
+    ("open Google",                   "_open_url_local"),
+    ("open Gmail",                    "_open_url_local"),
     ("press enter",                   "press_key"),
     ("close chrome",                  "execute_command"),
     ("open the calculator",           "open_application"),
@@ -28,7 +28,9 @@ tests = [
     ("what's the date",               "_local_date"),
     ("screenshot",                    "take_screenshot"),
     ("system status",                 "get_system_info"),
-    ("open github",                   "open_url"),
+    ("open github",                   "_open_url_local"),
+    ("Type hello into the current application", "type_text"),
+    ("type 'ls -la'",                 "type_text"),
 
     # Complex queries — should NOT match (return None)
     ("hello how are you",             None),
@@ -36,6 +38,7 @@ tests = [
     ("what is the meaning of life",   None),
     ("how do I install python",       None),
     ("write a python script",         None),
+    ("Write a Python script that calculates factorial.", None),
 ]
 
 print("=" * 70)
@@ -67,6 +70,9 @@ r1 = IntentClassifier.execute_local("_local_time", {})
 print(f"  Time: {r1}")
 r2 = IntentClassifier.execute_local("_local_date", {})
 print(f"  Date: {r2}")
+def test_intent_patterns():
+    assert failed == 0
 
-if failed > 0:
-    sys.exit(1)
+if __name__ == "__main__":
+    if failed > 0:
+        sys.exit(1)
