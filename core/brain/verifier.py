@@ -6,6 +6,7 @@ Never fabricates success.
 
 import os
 import psutil
+from pathlib import Path
 from typing import Optional, Any
 from dataclasses import dataclass
 from enum import Enum
@@ -68,6 +69,10 @@ class ResultVerifier:
         "generate_daily_briefing":   VerificationLevel.LEVEL_2,
         # Active Screen & Window Context Tools (Phase 4.3)
         "get_active_window_context": VerificationLevel.LEVEL_2,
+        # Personal Productivity Suite (Phase 5.0)
+        "manage_personal_notes_and_todos": VerificationLevel.LEVEL_2,
+        "smart_clipboard_assistant":       VerificationLevel.LEVEL_2,
+        "read_and_summarize_webpage":      VerificationLevel.LEVEL_2,
     }
 
     @classmethod
@@ -251,6 +256,43 @@ class ResultVerifier:
             err = raw_result.get("error", "Context capture failed.") if isinstance(raw_result, dict) else str(raw_result)
             return VerificationResult(verified=False, level=VerificationLevel.LEVEL_1, error=err, details=err)
 
+        # ── 8. Personal Productivity Suite Verification (Phase 5.0) ──
+        if t_name == "manage_personal_notes_and_todos":
+            if isinstance(raw_result, dict) and raw_result.get("success"):
+                todos_file = Path(r"D:\Jarvis\data\tasks\personal_todos.json")
+                persisted = todos_file.exists()
+                return VerificationResult(
+                    verified=persisted,
+                    level=VerificationLevel.LEVEL_2,
+                    evidence={"action": raw_result.get("action"), "item_id": raw_result.get("item_id"), "persisted": persisted},
+                    details=raw_result.get("message", "Personal to-do/notes operation completed.")
+                )
+            err = raw_result.get("error", "To-do/notes operation failed.") if isinstance(raw_result, dict) else str(raw_result)
+            return VerificationResult(verified=False, level=VerificationLevel.LEVEL_1, error=err, details=err)
+
+        if t_name == "smart_clipboard_assistant":
+            if isinstance(raw_result, dict) and raw_result.get("success"):
+                return VerificationResult(
+                    verified=True,
+                    level=VerificationLevel.LEVEL_2,
+                    evidence={"action": raw_result.get("action")},
+                    details=raw_result.get("message", "Clipboard operation completed.")
+                )
+            err = raw_result.get("error", "Clipboard operation failed.") if isinstance(raw_result, dict) else str(raw_result)
+            return VerificationResult(verified=False, level=VerificationLevel.LEVEL_1, error=err, details=err)
+
+        if t_name == "read_and_summarize_webpage":
+            if isinstance(raw_result, dict) and raw_result.get("success"):
+                char_cnt = raw_result.get("character_count", 0)
+                return VerificationResult(
+                    verified=char_cnt > 0 or bool(raw_result.get("extracted_text")),
+                    level=VerificationLevel.LEVEL_2,
+                    evidence={"url": raw_result.get("url"), "character_count": char_cnt},
+                    details=f"Extracted {char_cnt} characters from {raw_result.get('url')}."
+                )
+            err = raw_result.get("error", "Webpage extraction failed.") if isinstance(raw_result, dict) else str(raw_result)
+            return VerificationResult(verified=False, level=VerificationLevel.LEVEL_1, error=err, details=err)
+
         # Default fallback verification (Level 1: tool returned without error)
         is_error = isinstance(raw_result, str) and (
             raw_result.startswith("Error") or 
@@ -381,3 +423,8 @@ class ResultVerifier:
             evidence={"path": path_obj},
             details=f"File '{file_path}' still exists on disk."
         )
+
+
+# Expose module-level TOOL_LEVEL_REGISTRY alias
+TOOL_LEVEL_REGISTRY = ResultVerifier.TOOL_LEVEL_REGISTRY
+

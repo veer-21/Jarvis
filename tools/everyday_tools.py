@@ -27,6 +27,7 @@ from typing import Optional, Any, Dict, List
 from pydantic import BaseModel, Field
 
 from core.logger import log, error_log, audit_log
+from core.security import mask_sensitive_data
 
 # ─── Pydantic Parameter Schemas ───────────────────────────────────────────────
 
@@ -57,12 +58,30 @@ class SummarizeLocalDocumentArgs(BaseModel):
 class GenerateDailyBriefingArgs(BaseModel):
     city: str = Field(default="auto", description="City for weather lookup (default: 'auto' or user home city)")
 
+class ManagePersonalNotesAndTodosArgs(BaseModel):
+    action: str = Field(default="list", description="Action to perform: 'add', 'list', 'complete', or 'delete'")
+    content: Optional[str] = Field(default=None, description="Content/text of the to-do item or note")
+    item_id: Optional[str] = Field(default=None, description="Item ID to complete or delete")
+    category: str = Field(default="todo", description="Category: 'todo' or 'note'")
+
+class SmartClipboardAssistantArgs(BaseModel):
+    action: str = Field(default="read", description="Action to perform: 'read', 'write', or 'history'")
+    text_to_copy: Optional[str] = Field(default=None, description="Text to copy to clipboard when action='write'")
+
+class ReadAndSummarizeWebpageArgs(BaseModel):
+    url: str = Field(..., description="Webpage or article URL to read and summarize")
+    focus_question: Optional[str] = Field(default=None, description="Optional question or focus topic for the extraction")
+
 
 # ─── Global State & Persistence Paths ─────────────────────────────────────────
 
 REMINDERS_FILE = Path(r"D:\Jarvis\data\tasks\reminders.json")
+PERSONAL_TODOS_FILE = Path(r"D:\Jarvis\data\tasks\personal_todos.json")
 _active_timer_threads: Dict[str, threading.Timer] = {}
 _reminders_lock = threading.Lock()
+_todos_lock = threading.Lock()
+_CLIPBOARD_HISTORY: List[Dict[str, Any]] = []
+_clipboard_lock = threading.Lock()
 
 CATEGORY_EXTENSIONS: Dict[str, set[str]] = {
     "Documents": {".pdf", ".docx", ".doc", ".txt", ".rtf", ".pptx", ".ppt", ".xlsx", ".xls", ".csv", ".odt", ".epub"},
@@ -315,17 +334,20 @@ def _trigger_reminder_action(reminder_id: str, title: str, message: str) -> None
     # 1. Windows Notification (PowerShell BurntToast / Toast fallback)
     def notify_worker():
         try:
-            ps_script = f"""
+            ps_script = """
             [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
             $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
             $textNodes = $template.GetElementsByTagName("text")
-            $textNodes.Item(0).AppendChild($template.CreateTextNode("{title}")) > $null
-            $textNodes.Item(1).AppendChild($template.CreateTextNode("{message}")) > $null
+            $textNodes.Item(0).AppendChild($template.CreateTextNode($env:JARVIS_REM_TITLE)) > $null
+            $textNodes.Item(1).AppendChild($template.CreateTextNode($env:JARVIS_REM_MSG)) > $null
             $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("JARVIS")
             $notification = [Windows.UI.Notifications.ToastNotification]::new($template)
             $notifier.Show($notification)
             """
-            subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, timeout=5)
+            env = os.environ.copy()
+            env["JARVIS_REM_TITLE"] = str(title)
+            env["JARVIS_REM_MSG"] = str(message)
+            subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], env=env, capture_output=True, timeout=5)
         except Exception:
             try:
                 import ctypes
@@ -411,6 +433,7 @@ def list_and_manage_reminders(action: str = "list", reminder_id: Optional[str] =
                 "success": True,
                 "action": "list",
                 "active_count": len(active),
+                "pending_count": len(active),
                 "active_reminders": active,
                 "recent_history": recent,
             }
@@ -672,6 +695,21 @@ def generate_daily_briefing(city: str = "auto") -> Dict[str, Any]:
     now = datetime.now()
     dt_str = now.strftime("%A, %B %d, %Y at %I:%M %p")
 
+    # Read user preferences if available
+    user_name = "Sir"
+    resolved_city = city
+    prefs_file = Path(r"D:\Jarvis\data\user_preferences.json")
+    if prefs_file.exists():
+        try:
+            with open(prefs_file, "r", encoding="utf-8") as f:
+                prefs_data = json.load(f)
+                if prefs_data.get("user_name"):
+                    user_name = prefs_data["user_name"].strip()
+                if prefs_data.get("preferred_city") and city in ("auto", "local"):
+                    resolved_city = prefs_data["preferred_city"].strip()
+        except Exception:
+            pass
+
     # 1. System Health
     cpu_pct = psutil.cpu_percent(interval=0.1)
     ram = psutil.virtual_memory()
@@ -690,11 +728,15 @@ def generate_daily_briefing(city: str = "auto") -> Dict[str, Any]:
     reminders = _load_reminders()
     pending = [r for r in reminders if r.get("status") == "pending"]
 
+    # 2b. Pending To-Dos
+    todos = _load_todos()
+    pending_todos = [t for t in todos if t.get("category") == "todo" and t.get("status") == "pending"]
+
     # 3. Weather
     weather_summary = "Weather information unavailable."
     try:
         from tools.web_tools import get_weather
-        weather_res = get_weather(city if city != "auto" else "local")
+        weather_res = get_weather(resolved_city if resolved_city not in ("auto", "local") else "local")
         if weather_res and isinstance(weather_res, str):
             weather_summary = weather_res[:300]
     except Exception:
@@ -708,7 +750,14 @@ def generate_daily_briefing(city: str = "auto") -> Dict[str, Any]:
     else:
         reminders_bullets = "- No pending reminders scheduled.\n"
 
-    briefing_md = f"""# 🌅 Good Day, Sir! Here is your Daily Briefing
+    todos_bullets = ""
+    if pending_todos:
+        for t in pending_todos[:5]:
+            todos_bullets += f"- [ ] **{t.get('content')}** (ID: {t.get('item_id')})\n"
+    else:
+        todos_bullets = "- No pending to-do items.\n"
+
+    briefing_md = f"""# 🌅 Good Day, {user_name}! Here is your Daily Briefing
 
 📅 **Date & Time**: {dt_str}
 🌡️ **Weather**: {weather_summary}
@@ -720,15 +769,326 @@ def generate_daily_briefing(city: str = "auto") -> Dict[str, Any]:
 
 ⏰ **Today's Reminders & Tasks**:
 {reminders_bullets}
+📋 **Pending To-Do Items**:
+{todos_bullets}
 All core systems are operational and standing by for your commands.
 """
 
     return {
         "success": True,
+        "user_name": user_name,
+        "city": resolved_city,
         "datetime": dt_str,
         "system_health": system_health,
         "weather": weather_summary,
         "pending_reminders_count": len(pending),
         "pending_reminders": pending,
+        "pending_todos_count": len(pending_todos),
+        "pending_todos": pending_todos,
         "briefing_markdown": briefing_md,
     }
+
+
+# ─── Tool 8: manage_personal_notes_and_todos ──────────────────────────────────
+
+def _load_todos() -> List[Dict[str, Any]]:
+    PERSONAL_TODOS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if not PERSONAL_TODOS_FILE.exists():
+        return []
+    try:
+        with open(PERSONAL_TODOS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _save_todos(todos: List[Dict[str, Any]]) -> None:
+    PERSONAL_TODOS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(PERSONAL_TODOS_FILE, "w", encoding="utf-8") as f:
+        json.dump(todos, f, indent=2)
+
+
+def manage_personal_notes_and_todos(
+    action: str = "list",
+    content: Optional[str] = None,
+    title: Optional[str] = None,
+    notes: Optional[str] = None,
+    item_id: Optional[str] = None,
+    category: str = "todo",
+    due_date: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Persists and manages a personal To-Do list and Quick Notes store in data/tasks/personal_todos.json.
+    Actions:
+      - 'add': Adds a new note or to-do.
+      - 'list': Lists all active to-dos and notes.
+      - 'complete': Marks a to-do item completed by item_id or content substring match.
+      - 'delete': Removes an item by item_id or content substring match.
+    """
+    act = (action or "list").strip().lower()
+    cat_in = (category or "todo").strip().lower()
+    cat = "note" if cat_in in ("note", "notes", "quicknote") else "todo"
+
+    with _todos_lock:
+        items = _load_todos()
+
+        if act == "add":
+            item_text = (content or title or "").strip()
+            if not item_text:
+                return {"success": False, "error": "content or title is required when adding a to-do or note."}
+            new_id = f"todo_{uuid.uuid4().hex[:8]}" if cat == "todo" else f"note_{uuid.uuid4().hex[:8]}"
+            record = {
+                "item_id": new_id,
+                "title": (title or item_text).strip(),
+                "content": item_text,
+                "notes": str(notes).strip() if notes else "",
+                "category": cat,
+                "due_date": due_date,
+                "status": "pending",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": None
+            }
+            items.append(record)
+            _save_todos(items)
+            return {
+                "success": True,
+                "action": "add",
+                "item_id": new_id,
+                "category": cat,
+                "title": record["title"],
+                "content": item_text,
+                "status": "pending",
+                "message": f"Added {cat} [{new_id}]: '{item_text}'"
+            }
+
+        elif act == "list":
+            pending_todos = [i for i in items if i.get("category") == "todo" and i.get("status") == "pending"]
+            completed_todos = [i for i in items if i.get("category") == "todo" and i.get("status") == "completed"]
+            notes_list = [i for i in items if i.get("category") == "note"]
+            return {
+                "success": True,
+                "action": "list",
+                "total_items": len(items),
+                "pending_todos_count": len(pending_todos),
+                "pending_todos": pending_todos,
+                "completed_todos": completed_todos,
+                "notes": notes_list,
+                "items": items,
+            }
+
+        elif act == "complete":
+            search_key = (item_id or content or title or "").strip().lower()
+            target = None
+            for item in items:
+                if item_id and item.get("item_id") == item_id:
+                    target = item
+                    break
+                combined = f"{item.get('item_id', '')} {item.get('title', '')} {item.get('content', '')}".lower()
+                if search_key and search_key in combined:
+                    target = item
+                    break
+
+            if not target:
+                return {"success": False, "error": f"Item matching id='{item_id}' or content='{content or title}' not found."}
+
+            target["status"] = "completed"
+            target["completed_at"] = datetime.now(timezone.utc).isoformat()
+            _save_todos(items)
+            return {
+                "success": True,
+                "action": "complete",
+                "item_id": target.get("item_id"),
+                "content": target.get("content") or target.get("title"),
+                "status": "completed",
+                "message": f"Marked task [{target.get('item_id')}] '{target.get('content') or target.get('title')}' as completed."
+            }
+
+        elif act == "delete":
+            search_key = (item_id or content or title or "").strip().lower()
+            idx_to_remove = None
+            removed_item = None
+            for idx, item in enumerate(items):
+                if item_id and item.get("item_id") == item_id:
+                    idx_to_remove = idx
+                    removed_item = item
+                    break
+                combined = f"{item.get('item_id', '')} {item.get('title', '')} {item.get('content', '')}".lower()
+                if search_key and search_key in combined:
+                    idx_to_remove = idx
+                    removed_item = item
+                    break
+
+            if idx_to_remove is None:
+                return {"success": False, "error": f"Item matching id='{item_id}' or content='{content or title}' not found."}
+
+            items.pop(idx_to_remove)
+            _save_todos(items)
+            return {
+                "success": True,
+                "action": "delete",
+                "item_id": removed_item.get("item_id"),
+                "content": removed_item.get("content") or removed_item.get("title"),
+                "message": f"Deleted [{removed_item.get('item_id')}] '{removed_item.get('content') or removed_item.get('title')}'."
+            }
+
+        else:
+            return {"success": False, "error": f"Unknown action '{action}'. Valid actions are 'add', 'list', 'complete', 'delete'."}
+
+
+# ─── Tool 9: smart_clipboard_assistant ────────────────────────────────────────
+
+def smart_clipboard_assistant(
+    action: str = "read",
+    text_to_copy: Optional[str] = None,
+    content: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Everyday smart clipboard assistant allowing reading, writing, and history buffer inspection.
+    Maintains a ring-buffer of the last 10 items (masked with mask_sensitive_data).
+    """
+    act = (action or "read").strip().lower()
+
+    if act == "read":
+        try:
+            import pyperclip
+            raw_text = pyperclip.paste() or ""
+        except Exception:
+            raw_text = ""
+
+        masked_text = mask_sensitive_data(raw_text) if raw_text else ""
+        if raw_text:
+            with _clipboard_lock:
+                if not _CLIPBOARD_HISTORY or _CLIPBOARD_HISTORY[-1].get("raw") != raw_text:
+                    _CLIPBOARD_HISTORY.append({
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "text": masked_text,
+                        "raw": raw_text,
+                        "length": len(raw_text)
+                    })
+                    if len(_CLIPBOARD_HISTORY) > 10:
+                        _CLIPBOARD_HISTORY.pop(0)
+
+        return {
+            "success": True,
+            "action": "read",
+            "content": raw_text,
+            "masked_content": masked_text,
+            "character_count": len(raw_text),
+            "preview": raw_text[:300] if raw_text else "",
+            "message": f"Read {len(raw_text)} characters from clipboard." if raw_text else "Clipboard is currently empty."
+        }
+
+    elif act == "write":
+        write_val = text_to_copy if text_to_copy is not None else content
+        if write_val is None:
+            return {"success": False, "error": "text_to_copy or content is required for action='write'."}
+        text_str = str(write_val)
+        try:
+            import pyperclip
+            pyperclip.copy(text_str)
+        except Exception as e:
+            return {"success": False, "error": f"Failed to write to clipboard: {e}"}
+
+        masked_text = mask_sensitive_data(text_str)
+        with _clipboard_lock:
+            _CLIPBOARD_HISTORY.append({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "text": masked_text,
+                "raw": text_str,
+                "length": len(text_str)
+            })
+            if len(_CLIPBOARD_HISTORY) > 10:
+                _CLIPBOARD_HISTORY.pop(0)
+
+        return {
+            "success": True,
+            "action": "write",
+            "character_count": len(text_str),
+            "preview": text_str[:200],
+            "message": f"Successfully copied {len(text_str)} characters to clipboard."
+        }
+
+    elif act == "history":
+        with _clipboard_lock:
+            history_copy = [
+                {"timestamp": h["timestamp"], "text": h["text"], "length": h["length"]}
+                for h in _CLIPBOARD_HISTORY
+            ]
+        return {
+            "success": True,
+            "action": "history",
+            "count": len(history_copy),
+            "history": history_copy
+        }
+
+    else:
+        return {"success": False, "error": f"Unknown action '{action}'. Valid actions are 'read', 'write', 'history'."}
+
+
+# ─── Tool 10: read_and_summarize_webpage ──────────────────────────────────────
+
+def read_and_summarize_webpage(
+    url: str,
+    focus_question: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Fetches any public article, documentation page, or blog URL, strips navigation, ads,
+    scripts, and styles, and returns clean readable text structured for instant summarization.
+    """
+    clean_url = (url or "").strip().strip('"').strip("'")
+    if not clean_url:
+        return {"success": False, "error": "url parameter is required."}
+    if not clean_url.startswith(("http://", "https://")):
+        clean_url = "https://" + clean_url
+
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0 Safari/537.36"
+            )
+        })
+        resp = session.get(clean_url, timeout=15, allow_redirects=True)
+        resp.raise_for_status()
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        title = soup.title.string.strip() if soup.title and soup.title.string else clean_url
+
+        # Remove clutter
+        for tag in soup(["script", "style", "nav", "footer", "header", "aside", "noscript", "svg", "form"]):
+            tag.decompose()
+
+        # Extract text
+        text = soup.get_text(separator="\n", strip=True)
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        clean_text = "\n".join(lines)
+
+        word_count = len(clean_text.split())
+        char_count = len(clean_text)
+
+        # Cap at 15,000 characters for token safety
+        capped_text = clean_text[:15000]
+        if char_count > 15000:
+            capped_text += f"\n\n[Note: Webpage text truncated at 15,000 chars of {char_count} total characters.]"
+
+        return {
+            "success": True,
+            "url": clean_url,
+            "title": title,
+            "character_count": char_count,
+            "word_count": word_count,
+            "focus_question": focus_question,
+            "extracted_text": capped_text,
+            "message": f"Successfully extracted {word_count} words from '{title}'."
+        }
+    except Exception as e:
+        error_log.error(f"Failed to read webpage {clean_url}: {e}")
+        return {
+            "success": False,
+            "url": clean_url,
+            "error": f"Failed to fetch or parse webpage: {e}"
+        }

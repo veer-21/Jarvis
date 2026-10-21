@@ -721,6 +721,45 @@
     body.mode-pro #routine-bar {
       display: none !important;
     }
+    body.mode-pro #active-reminders-bar {
+      display: none !important;
+    }
+
+    /* Active Reminders Bar */
+    .active-reminders-bar {
+      padding: 8px 24px;
+      border-bottom: 1px solid rgba(0, 180, 255, 0.12);
+      background: rgba(0, 180, 255, 0.04);
+      display: flex; align-items: center; gap: 12px;
+      overflow-x: auto;
+    }
+    .active-reminders-bar.hidden {
+      display: none !important;
+    }
+    .reminders-bar-label {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 0.7rem; font-weight: 600; color: var(--cyan);
+      white-space: nowrap; flex-shrink: 0;
+    }
+    .reminders-chips-container {
+      display: flex; align-items: center; gap: 8px; overflow-x: auto;
+    }
+    .reminder-chip {
+      display: flex; align-items: center; gap: 6px;
+      padding: 3px 10px; border-radius: 12px;
+      background: rgba(0, 212, 255, 0.08); border: 1px solid rgba(0, 212, 255, 0.2);
+      font-size: 0.68rem; color: var(--text-prime); white-space: nowrap; flex-shrink: 0;
+    }
+    .reminder-chip-time {
+      font-family: var(--font-code); font-size: 0.6rem; color: var(--cyan); opacity: 0.8;
+    }
+    .reminder-chip-cancel {
+      cursor: pointer; background: transparent; border: none; color: var(--text-muted);
+      font-size: 0.75rem; line-height: 1; padding: 0 2px; transition: color 0.2s;
+    }
+    .reminder-chip-cancel:hover {
+      color: var(--red);
+    }
 
     /* 1-Click Routine Cards */
     .routine-cards-bar {
@@ -1027,6 +1066,16 @@
       </div>
     </div>
 
+    <!-- Active Reminders & Timers Bar in Everyday Mode -->
+    <div class="active-reminders-bar hidden" id="active-reminders-bar">
+      <div class="reminders-bar-label">
+        <span>⏰ Active Reminders (<span id="reminders-count">0</span>):</span>
+      </div>
+      <div class="reminders-chips-container" id="reminders-chips-container">
+        <!-- Injected dynamically -->
+      </div>
+    </div>
+
     <div class="chat-area" id="chat-area">
       <!-- Messages injected here -->
     </div>
@@ -1303,6 +1352,7 @@ function openOnboardingModal() {
 
 function closeOnboardingModal() {
   document.getElementById('onboarding-modal').classList.add('hidden');
+  localStorage.setItem('jarvis_onboarding_done', 'true');
 }
 
 function nextOnboardingStep(step) {
@@ -1370,6 +1420,7 @@ async function finishOnboarding() {
   } catch (e) {
     showToast('Saved profile locally.', 'info');
   }
+  localStorage.setItem('jarvis_onboarding_done', 'true');
   closeOnboardingModal();
   addMessage('jarvis', `Welcome aboard${userName ? ', ' + userName : ''}! Everyday Mode is active. You can organize folders, summarize documents, set reminders, or ask any question.`);
 }
@@ -1493,6 +1544,67 @@ function enterApp() {
   loadMemory();
   pollMetrics();
   loadAgents();
+  loadReminders();
+  if (localStorage.getItem('jarvis_onboarding_done') !== 'true') {
+    openOnboardingModal();
+  }
+}
+
+// ── Reminders Management (Everyday Mode) ─────────────────────
+async function loadReminders() {
+  if (!authToken || authToken === 'demo-mode' || authToken === 'no-auth') return;
+  try {
+    const res = await fetch(`${API_BASE}/tasks/reminders`, {
+      headers: { 'Authorization': `Bearer ${authToken}` }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const list = data.active_reminders || [];
+      renderRemindersBar(list);
+    }
+  } catch (e) {}
+}
+
+function renderRemindersBar(reminders) {
+  const bar = document.getElementById('active-reminders-bar');
+  const countEl = document.getElementById('reminders-count');
+  const container = document.getElementById('reminders-chips-container');
+  if (!bar || !container) return;
+
+  if (!reminders || reminders.length === 0) {
+    bar.classList.add('hidden');
+    container.innerHTML = '';
+    return;
+  }
+
+  bar.classList.remove('hidden');
+  countEl.textContent = reminders.length;
+  container.innerHTML = reminders.map(r => {
+    const timeStr = r.trigger_at ? new Date(r.trigger_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Pending';
+    return `
+      <div class="reminder-chip">
+        <span>${escHtml(r.title)}</span>
+        <span class="reminder-chip-time">${escHtml(timeStr)}</span>
+        <button class="reminder-chip-cancel" onclick="cancelReminder('${escHtml(r.reminder_id)}')" title="Cancel reminder">✕</button>
+      </div>
+    `;
+  }).join('');
+}
+
+async function cancelReminder(reminderId) {
+  if (!authToken) return;
+  try {
+    const res = await fetch(`${API_BASE}/tasks/reminders/${encodeURIComponent(reminderId)}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${authToken}` }
+    });
+    if (res.ok) {
+      showToast('Reminder cancelled.', 'info');
+      loadReminders();
+    }
+  } catch (e) {
+    showToast('Failed to cancel reminder.', 'error');
+  }
 }
 
 // Check existing token on load
@@ -2034,6 +2146,7 @@ function connectWebSocket() {
       // Proactive alerts and reminder triggers
       if (data.type === 'reminder_triggered') {
         showToast(`⏰ ${data.title}${data.message ? ': ' + data.message : ''}`, 'info');
+        loadReminders();
       }
       if (data.type === 'proactive_alert' && data.alert) {
         showToast(data.alert, 'info');

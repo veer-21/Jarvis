@@ -93,6 +93,7 @@ data/memory/chroma/
 data/tasks/
 data/user_preferences.json
 data/memory/episodes.json
+tools/custom/quarantine/
 memory.txt
 test_live.txt
 

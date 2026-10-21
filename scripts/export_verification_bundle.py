@@ -26,6 +26,8 @@ ALLOWED_PREFIXES = (
     "ui/",
     "tests/",
     "scripts/",
+    "Start_Jarvis",
+    "jarvis_antigravity_master_blueprint.md",
 )
 
 EXCLUDED_PARTS = {
@@ -75,7 +77,7 @@ def run_command(cmd: list[str]) -> tuple[int, str, str]:
 
 def get_git_status_and_diff() -> tuple[str, str, list[str]]:
     # Get git status
-    _, status_out, _ = run_command(["git", "status", "--porcelain"])
+    _, status_out, _ = run_command(["git", "status", "--porcelain", "-uall"])
     _, diff_out, _ = run_command(["git", "diff"])
 
     candidates = set()

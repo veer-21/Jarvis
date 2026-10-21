@@ -34,6 +34,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import AsyncIterator, Annotated, Optional, Any
+from pydantic import BaseModel
 
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -798,6 +799,75 @@ async def get_task_history(auth: AuthRequired, limit: int = 50):
     return {"tasks": tasks}
 
 
+@app.get("/tasks/reminders", tags=["Tasks"])
+async def get_active_reminders(auth: AuthRequired):
+    """
+    Returns active reminders and pending count for Everyday Mode dashboard.
+    """
+    from tools.everyday_tools import list_and_manage_reminders
+    result = list_and_manage_reminders(action="list")
+    return {
+        "success": True,
+        "active_reminders": result.get("active_reminders", []),
+        "pending_count": result.get("pending_count", len(result.get("active_reminders", []))),
+    }
+
+
+@app.delete("/tasks/reminders/{reminder_id}", tags=["Tasks"])
+async def cancel_reminder_by_id(reminder_id: str, auth: AuthRequired):
+    """
+    Cancels a scheduled reminder by reminder ID.
+    """
+    from tools.everyday_tools import list_and_manage_reminders
+    result = list_and_manage_reminders(action="cancel", reminder_id=reminder_id)
+    return result
+
+
+class TodoCreateRequest(BaseModel):
+    title: str
+    notes: Optional[str] = ""
+    category: Optional[str] = "personal"
+    due_date: Optional[str] = None
+
+
+@app.get("/tasks/todos", tags=["Tasks"])
+async def get_personal_todos(auth: AuthRequired, category: Optional[str] = None):
+    """Returns personal to-dos list for the Everyday Mode dashboard."""
+    from tools.everyday_tools import manage_personal_notes_and_todos
+    result = manage_personal_notes_and_todos(action="list", category=category or "all")
+    return result
+
+
+@app.post("/tasks/todos", tags=["Tasks"])
+async def create_personal_todo(body: TodoCreateRequest, auth: AuthRequired):
+    """Create a personal to-do item."""
+    from tools.everyday_tools import manage_personal_notes_and_todos
+    result = manage_personal_notes_and_todos(
+        action="add",
+        title=body.title,
+        notes=body.notes or "",
+        category=body.category or "personal",
+        due_date=body.due_date
+    )
+    return result
+
+
+@app.post("/tasks/todos/{item_id}/complete", tags=["Tasks"])
+async def complete_personal_todo(item_id: str, auth: AuthRequired):
+    """Marks a personal to-do item as completed."""
+    from tools.everyday_tools import manage_personal_notes_and_todos
+    result = manage_personal_notes_and_todos(action="complete", item_id=item_id)
+    return result
+
+
+@app.delete("/tasks/todos/{item_id}", tags=["Tasks"])
+async def delete_personal_todo(item_id: str, auth: AuthRequired):
+    """Deletes a personal to-do item."""
+    from tools.everyday_tools import manage_personal_notes_and_todos
+    result = manage_personal_notes_and_todos(action="delete", item_id=item_id)
+    return result
+
+
 @app.get("/tasks/{task_id}", tags=["Tasks"])
 async def get_task_detail(task_id: str, auth: AuthRequired):
     """Retrieve a specific persisted task record by ID, enforcing strict user and session ownership."""
@@ -955,6 +1025,17 @@ async def clear_memory(auth: AuthRequired, confirm: bool = False):
 
 
 # ─── System Routes ────────────────────────────────────────────────────────────
+
+@app.get("/health", tags=["System"])
+async def health_check():
+    """Unauthenticated fast health check endpoint for launchers and monitoring."""
+    return {
+        "status": "ok",
+        "healthy": True,
+        "version": "3.0.0",
+        "uptime_seconds": round(time.time() - _START_TIME, 1) if _START_TIME > 0 else 0.0
+    }
+
 
 @app.get("/status", response_model=SystemStatus, tags=["System"])
 async def get_status(auth: AuthRequired):

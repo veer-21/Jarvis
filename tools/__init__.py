@@ -74,13 +74,16 @@ def get_tool_registry() -> dict:
 
     try:
         from tools import everyday_tools
-        registry["smart_organize_folder"]     = everyday_tools.smart_organize_folder
-        registry["undo_folder_organization"]  = everyday_tools.undo_folder_organization
-        registry["create_reminder_or_timer"]  = everyday_tools.create_reminder_or_timer
-        registry["list_and_manage_reminders"] = everyday_tools.list_and_manage_reminders
-        registry["control_windows_setting"]   = everyday_tools.control_windows_setting
-        registry["summarize_local_document"]  = everyday_tools.summarize_local_document
-        registry["generate_daily_briefing"]   = everyday_tools.generate_daily_briefing
+        registry["smart_organize_folder"]            = everyday_tools.smart_organize_folder
+        registry["undo_folder_organization"]         = everyday_tools.undo_folder_organization
+        registry["create_reminder_or_timer"]         = everyday_tools.create_reminder_or_timer
+        registry["list_and_manage_reminders"]        = everyday_tools.list_and_manage_reminders
+        registry["control_windows_setting"]          = everyday_tools.control_windows_setting
+        registry["summarize_local_document"]         = everyday_tools.summarize_local_document
+        registry["generate_daily_briefing"]          = everyday_tools.generate_daily_briefing
+        registry["manage_personal_notes_and_todos"] = everyday_tools.manage_personal_notes_and_todos
+        registry["smart_clipboard_assistant"]        = everyday_tools.smart_clipboard_assistant
+        registry["read_and_summarize_webpage"]       = everyday_tools.read_and_summarize_webpage
     except ImportError as e:
         log.warning(f"everyday_tools unavailable: {e}")
 
@@ -113,6 +116,8 @@ def get_tool_categories() -> dict[str, list[str]]:
                         "browser_click", "browser_fill"],
         "everyday":   ["smart_organize_folder", "undo_folder_organization", "create_reminder_or_timer",
                         "list_and_manage_reminders", "control_windows_setting", "summarize_local_document",
-                        "generate_daily_briefing", "get_active_window_context"],
+                        "generate_daily_briefing", "get_active_window_context",
+                        "manage_personal_notes_and_todos", "smart_clipboard_assistant",
+                        "read_and_summarize_webpage"],
     }
 
