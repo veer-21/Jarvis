@@ -33,11 +33,12 @@ import asyncio
 from pathlib import Path
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import AsyncIterator, Annotated
+from typing import AsyncIterator, Annotated, Optional, Any
 
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
+from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 
 from api.models import (
@@ -49,8 +50,10 @@ from api.models import (
     SystemStatus, HistoryResponse, ChatMessage, MessageRole,
     SuccessResponse, ErrorResponse,
     SystemMetrics, AgentStatusModel, AgentSystemStatus,
+    OnboardingDiagnosticsResponse, DiagnosticItem,
+    OnboardingConfigureRequest, OnboardingConfigureResponse,
 )
-from api.auth import create_access_token, revoke_token, require_auth, AuthRequired
+from api.auth import create_access_token, revoke_token, require_auth, AuthRequired, _bearer_scheme
 from core.logger import log, error_log
 from core.security import owner_auth, guard
 from api.ws_manager import ws_manager
@@ -76,21 +79,82 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from core.config import get_api_key
 
     try:
-        _memory  = JarvisMemory()
+        try:
+            _memory  = JarvisMemory()
+        except Exception as mem_err:
+            error_log.error(f"Resilient memory initialization fallback: {mem_err}")
+            _memory = None
+
         _brain   = JarvisBrain(api_key=get_api_key(), memory=_memory)
         log.info("API subsystems initialised successfully.")
+
+        # Register UI/WebSocket security confirmation handler so high-risk tools don't block on terminal input
+        from typing import Any
+        from core.security import guard, mask_sensitive_data
+        main_loop = asyncio.get_running_loop()
+        ws_manager.set_main_loop(main_loop)
+
+        def _api_confirmation_handler(tool_name: str, args: dict, risk_level: Any) -> tuple[bool, str]:
+            from core.brain.task_model import current_execution_context
+            ctx = current_execution_context.get()
+            session_id = ctx.session_id if ctx else None
+            user_id = ctx.user_id if ctx else None
+            task_id = ctx.request_id if ctx else None
+
+            conf_id, event = guard.create_pending_confirmation(
+                tool_name, args, risk_level, timeout_sec=60,
+                session_id=session_id, user_id=user_id, task_id=task_id
+            )
+            risk_str = risk_level.value if hasattr(risk_level, "value") else str(risk_level)
+
+            # Deliver structured confirmation event strictly to owning session (P0-3 privacy)
+            conf_payload = {
+                "type": "WAITING_FOR_CONFIRMATION",
+                "confirmation_id": conf_id,
+                "session_id": session_id,
+                "user_id": user_id,
+                "task_id": task_id,
+                "action": f"Execute {tool_name}",
+                "tool_name": tool_name,
+                "tool": tool_name,
+                "args": mask_sensitive_data(args),
+                "parameters": mask_sensitive_data(args),
+                "risk_level": risk_str,
+                "risk_reason": f"High-risk action requiring owner approval: {tool_name}",
+                "timeout_seconds": 60,
+                "message": f"Tool '{tool_name}' requires approval ({risk_str})."
+            }
+            if session_id:
+                ws_manager.send_confirmation_to_session(session_id, conf_payload)
+
+            finished = event.wait(timeout=60.0)
+            if not finished:
+                guard.remove_confirmation(conf_id)
+                return False, "Confirmation request timed out after 60 seconds."
+
+            with guard._confirm_lock:
+                conf = guard._pending_confirmations.get(conf_id, {})
+                approved = conf.get("approved", False)
+
+            # Clean up completed confirmation from pending storage
+            guard.remove_confirmation(conf_id)
+            return approved, "Approved via UI/WebSocket" if approved else "Denied via UI/WebSocket"
+
+        guard.register_confirmation_handler(_api_confirmation_handler)
         
         # Start Voice Manager if enabled
         import os
         if os.getenv("JARVIS_VOICE_MODE") == "1":
-            from core.voice_manager import ContinuousVoiceManager
-            global _voice_mgr
-            _voice_mgr = ContinuousVoiceManager(brain=_brain)
-            _voice_mgr.start()
+            try:
+                from core.voice_manager import ContinuousVoiceManager
+                global _voice_mgr
+                _voice_mgr = ContinuousVoiceManager(brain=_brain)
+                _voice_mgr.start()
+            except Exception as voice_err:
+                error_log.error(f"Resilient Voice Manager startup fallback: {voice_err}")
             
     except Exception as e:
-        error_log.error(f"API startup failed: {e}")
-        raise
+        error_log.error(f"API startup warning: {e}. Proceeding with degraded capability.")
 
     yield
 
@@ -120,6 +184,12 @@ app.add_middleware(
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def set_server_brain(brain: JarvisBrain, memory: JarvisMemory = None):
+    global _brain, _memory
+    _brain = brain
+    if memory:
+        _memory = memory
 
 def _get_brain() -> JarvisBrain:
     if _brain is None:
@@ -154,17 +224,33 @@ async def login(body: AuthRequest):
 
 
 @app.post("/auth/set-pin", response_model=SuccessResponse, tags=["Auth"])
-async def set_pin(body: SetPinRequest):
+async def set_pin(body: SetPinRequest, credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme)):
     """
     Set or change the owner PIN.
     First-run: no auth required. Subsequent calls require Bearer token.
     """
+    from core.security import PIN_FILE
+    if PIN_FILE.exists():
+        if not credentials:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required to change existing owner PIN.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        from api.auth import decode_token
+        if not decode_token(credentials.credentials):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired token.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
     if body.new_pin != body.confirm_pin:
         raise HTTPException(status_code=400, detail="PINs do not match.")
     if len(body.new_pin) < 4:
         raise HTTPException(status_code=400, detail="PIN must be at least 4 characters.")
     owner_auth.set_pin(body.new_pin)
-    return SuccessResponse(message="PIN set successfully.")
+    return SuccessResponse(message="Owner PIN configured successfully.")
 
 
 @app.post("/auth/logout", response_model=SuccessResponse, tags=["Auth"])
@@ -174,6 +260,18 @@ async def logout(credentials: AuthRequired):
     return SuccessResponse(message="Logged out. Session terminated.")
 
 
+def _extract_auth_user(auth: Any) -> str:
+    if isinstance(auth, dict):
+        return auth.get("sub", "default")
+    return getattr(auth, "username", "default")
+
+
+def _extract_auth_session(auth: Any) -> str:
+    if isinstance(auth, dict):
+        return auth.get("session_id") or auth.get("jti") or auth.get("sub", "default_session")
+    return getattr(auth, "session_id", None) or getattr(auth, "username", "default_session")
+
+
 # ─── Chat Routes ─────────────────────────────────────────────────────────────
 
 @app.post("/chat", response_model=ChatResponse, tags=["Chat"])
@@ -181,15 +279,22 @@ async def chat(body: ChatRequest, auth: AuthRequired):
     """Send a message and receive JARVIS's response (non-streaming)."""
     brain = _get_brain()
     try:
+        caller_user = _extract_auth_user(auth)
+        session_id = _extract_auth_session(auth)
         if body.message.strip().lower() == "reset":
-            brain.reset_chat()
+            brain.reset_chat(session_id=session_id, user_id=caller_user)
             return ChatResponse(
                 response="Chat session reset. Memory cleared.",
                 model=brain._model_name,
                 timestamp=_ts(),
             )
-            
-        response = await asyncio.to_thread(brain.process_input, body.message, body.store)
+        from core.brain.task_model import ExecutionContext
+        ctx = ExecutionContext(
+            store_memory=body.store,
+            session_id=session_id,
+            user_id=caller_user
+        )
+        response = await asyncio.to_thread(brain.process_input, body.message, body.store, ctx)
         return ChatResponse(
             response=response,
             model=brain._model_name,
@@ -203,20 +308,37 @@ async def chat(body: ChatRequest, auth: AuthRequired):
 async def chat_stream(body: ChatRequest, auth: AuthRequired):
     """Stream JARVIS's response token-by-token via Server-Sent Events."""
     brain = _get_brain()
+    caller_user = _extract_auth_user(auth)
+    session_id = _extract_auth_session(auth)
+    from core.brain.task_model import ExecutionContext
+    import threading
+    cancel_token = threading.Event()
+    ctx = ExecutionContext(
+        store_memory=body.store,
+        session_id=session_id,
+        user_id=caller_user,
+        cancellation_token=cancel_token
+    )
+    ws_manager.register_active_task(session_id, ctx, user_id=caller_user)
 
-    def _generate():
+    async def _generate():
         try:
             if body.message.strip().lower() == "reset":
-                brain.reset_chat()
+                brain.reset_chat(session_id=session_id, user_id=caller_user)
                 yield f"data: {json.dumps({'chunk': 'Chat session reset. Memory cleared.'})}\n\n"
                 yield "data: [DONE]\n\n"
                 return
 
-            for chunk in brain.process_input_stream(body.message):
+            async for chunk in brain.process_input_stream(body.message, interrupt_event=cancel_token, context=ctx):
+                if cancel_token.is_set():
+                    yield f"data: {json.dumps({'interrupted': True})}\n\n"
+                    break
                 yield f"data: {json.dumps({'chunk': chunk})}\n\n"
             yield "data: [DONE]\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        finally:
+            ws_manager.unregister_active_task(session_id)
 
     return StreamingResponse(
         _generate(),
@@ -290,6 +412,19 @@ async def websocket_jarvis(ws: WebSocket):
     """
     await ws_manager.connect(ws)
 
+    # Check query params for token at initial connection time
+    query_token = ws.query_params.get("token", "").replace("Bearer ", "").strip()
+    if query_token:
+        from api.auth import decode_token
+        user = decode_token(query_token)
+        if user:
+            ws_manager.authenticate_connection(
+                ws,
+                token=query_token,
+                user_id=user.get("sub", "default"),
+                session_id=user.get("session_id")
+            )
+
     try:
         while True:
             data = await ws.receive_json()
@@ -297,11 +432,33 @@ async def websocket_jarvis(ws: WebSocket):
             # Client can send commands
             cmd = data.get("command", "")
             
-            if cmd == "chat":
-                # Validate token
-                token = data.get("token", "").replace("Bearer ", "").strip()
+            # Authenticate connection whenever token is supplied
+            token = data.get("token", "").replace("Bearer ", "").strip()
+            if token:
                 from api.auth import decode_token
-                if not decode_token(token):
+                user = decode_token(token)
+                if user:
+                    ws_manager.authenticate_connection(
+                        ws,
+                        token=token,
+                        user_id=user.get("sub", "default"),
+                        session_id=user.get("session_id")
+                    )
+
+            if cmd == "auth":
+                if ws_manager.is_authenticated(ws):
+                    await ws.send_json({
+                        "type": "AUTH_SUCCESS",
+                        "user": ws_manager.get_user_id(ws),
+                        "session_id": ws_manager.get_session_id(ws)
+                    })
+                else:
+                    await ws.send_json({"type": "AUTH_FAILED", "error": "Invalid token."})
+                continue
+
+            if cmd == "chat":
+                # Validate token or existing authenticated connection
+                if not ws_manager.is_authenticated(ws):
                     await ws.send_json({"error": "Unauthorised. Provide a valid token."})
                     continue
 
@@ -309,34 +466,121 @@ async def websocket_jarvis(ws: WebSocket):
                 if not message:
                     continue
 
-                await ws_manager.send_status(ws, "THINKING")
-                
-                # Use a background task or run in executor to not block the ws loop
-                # In a full implementation, we might delegate this to a queue.
+                # Server-derived session identity
+                session_id = ws_manager.get_session_id(ws)
+                user_id = ws_manager.get_user_id(ws)
+                store_mem = data.get("store", True)
                 brain = _get_brain()
+                from core.brain.task_model import ExecutionContext
+                import threading
+                cancel_token = threading.Event()
+                ctx = ExecutionContext(
+                    session_id=session_id,
+                    user_id=user_id,
+                    store_memory=store_mem,
+                    cancellation_token=cancel_token
+                )
+                ws_manager.register_active_task(session_id, ctx)
                 try:
-                    await ws_manager.send_status(ws, "SPEAKING")
-                    # We can stream tokens
-                    for chunk in brain.process_input_stream(message):
-                        await ws_manager.send_chunk(chunk)
-                        # Yield control slightly for fast streaming
+                    async for chunk in brain.process_input_stream(message, interrupt_event=cancel_token, context=ctx):
+                        if cancel_token.is_set():
+                            break
                         await asyncio.sleep(0)
                         
-                    await ws_manager.send_stream_end()
-                    await ws_manager.send_status(ws, "IDLE")
+                    await ws_manager.send_stream_end_to_session(session_id)
                 except Exception as e:
-                    await ws_manager.send_status(ws, "ERROR")
+                    await ws_manager.send_status_to_session(session_id, "ERROR")
                     await ws.send_json({"error": str(e)})
+                finally:
+                    ws_manager.unregister_active_task(session_id)
 
             elif cmd == "interrupt":
-                # Handle interrupt TTS/processing
-                await ws_manager.send_status(ws, "IDLE")
-                # Need to implement logic to actually stop generating/TTS
+                if not ws_manager.is_authenticated(ws):
+                    await ws.send_json({
+                        "type": "AUTH_FAILED",
+                        "error": "Unauthorised. Interrupt requires an authenticated connection.",
+                        "success": False
+                    })
+                    continue
+
+                # Derive session identity strictly from the authenticated WebSocket connection
+                session_id = ws_manager.get_session_id(ws)
+                cancelled = ws_manager.cancel_active_task(session_id, "User requested interruption via WebSocket")
+                
+                # If continuous voice is running, enforce explicit session owner policy (P0-2)
+                global _voice_mgr
+                if _voice_mgr and hasattr(_voice_mgr, "stop_speaking_for_session"):
+                    _voice_mgr.stop_speaking_for_session(session_id)
+                elif _voice_mgr and hasattr(_voice_mgr, "voice"):
+                    try:
+                        _voice_mgr.voice.stop_speaking()
+                    except Exception as ve:
+                        log.debug(f"Voice stop speaking notice: {ve}")
+
+                await ws_manager.send_status_to_session(session_id, "IDLE")
+                await ws.send_json({
+                    "type": "TASK_CANCELLED",
+                    "session_id": session_id,
+                    "cancelled": cancelled,
+                    "reason": "WebSocket interrupt"
+                })
+
+            elif cmd == "confirm":
+                if not ws_manager.is_authenticated(ws):
+                    await ws.send_json({
+                        "type": "CONFIRMATION_RESULT",
+                        "error": "Unauthorised. Confirmation mutations require an authenticated connection.",
+                        "success": False
+                    })
+                    continue
+
+                conf_id = data.get("confirmation_id")
+                approved = bool(data.get("approved", False))
+                # Derive identity strictly from server-side authenticated connection (never trust client payload)
+                conn_session_id = ws_manager.get_session_id(ws)
+                conn_user_id = ws_manager.get_user_id(ws)
+                from core.security import guard
+                success = guard.submit_confirmation(
+                    conf_id,
+                    approved,
+                    session_id=conn_session_id,
+                    user_id=conn_user_id
+                )
+                await ws.send_json({
+                    "type": "CONFIRMATION_RESULT",
+                    "confirmation_id": conf_id,
+                    "approved": approved,
+                    "success": success
+                })
+                if success:
+                    ws_manager.send_confirmation_to_session(conn_session_id, {
+                        "type": "CONFIRMATION_PROCESSED",
+                        "confirmation_id": conf_id,
+                        "approved": approved,
+                        "success": success
+                    })
 
             elif cmd == "status_update":
-                # UI notifying backend of its state (e.g. LISTENING)
+                if not ws_manager.is_authenticated(ws):
+                    await ws.send_json({
+                        "type": "AUTH_FAILED",
+                        "error": "Unauthorised. Status update requires an authenticated connection.",
+                        "success": False
+                    })
+                    continue
+
+                conn_session_id = ws_manager.get_session_id(ws)
+                conn_user_id = ws_manager.get_user_id(ws)
                 status = data.get("status", "IDLE")
                 log.info(f"UI Status changed to: {status}")
+                if status == "LISTENING":
+                    try:
+                        brain = _get_brain()
+                        turns = brain.memory_manager.get_recent_conversation(n=1, session_id=conn_session_id, user_id=conn_user_id)
+                        if turns:
+                            brain.context.start_prefetch(turns[0]["content"], session_id=conn_session_id, user_id=conn_user_id)
+                    except Exception as e:
+                        log.warning(f"Could not trigger pre-fetch on LISTENING status: {e}")
 
     except WebSocketDisconnect:
         ws_manager.disconnect(ws)
@@ -353,9 +597,11 @@ async def websocket_jarvis(ws: WebSocket):
 
 @app.get("/history", response_model=HistoryResponse, tags=["Chat"])
 async def get_history(auth: AuthRequired, n: int = 20):
-    """Retrieve recent conversation history (last N turns)."""
+    """Retrieve recent conversation history (last N turns) scoped to the caller's session (P1-5)."""
+    caller_user = _extract_auth_user(auth)
+    caller_session = _extract_auth_session(auth)
     memory = _get_memory()
-    turns  = memory.get_recent_conversation(n=n)
+    turns  = memory.get_recent_conversation(n=n, session_id=caller_session, user_id=caller_user)
     return HistoryResponse(
         turns=[
             ChatMessage(
@@ -366,15 +612,17 @@ async def get_history(auth: AuthRequired, n: int = 20):
             for t in turns
         ],
         count = len(turns),
-        total = memory.conversations.count(),
+        total = memory.conversations.count(session_id=caller_session, user_id=caller_user),
     )
 
 
 @app.delete("/history", response_model=SuccessResponse, tags=["Chat"])
 async def clear_history(auth: AuthRequired):
-    """Clear conversation history."""
+    """Clear conversation history for the authenticated caller's session (P1-5)."""
+    caller_user = _extract_auth_user(auth)
+    caller_session = _extract_auth_session(auth)
     memory = _get_memory()
-    memory.conversations.clear()
+    memory.conversations.clear(session_id=caller_session, user_id=caller_user)
     return SuccessResponse(message="Conversation history cleared.")
 
 
@@ -384,19 +632,75 @@ async def clear_history(auth: AuthRequired):
 async def execute_task(body: TaskRequest, auth: AuthRequired):
     """Submit an autonomous multi-step task for JARVIS to plan and execute."""
     brain = _get_brain()
-    
+    caller_user = _extract_auth_user(auth)
+    session_id = _extract_auth_session(auth)
+    from core.brain.task_model import ExecutionContext, TaskStatus
+    import uuid
+    import threading
+    task_id = f"task_{uuid.uuid4().hex[:8]}"
+    cancel_token = threading.Event()
+    ctx = ExecutionContext(
+        task_id=task_id,
+        request_id=task_id,
+        session_id=session_id,
+        user_id=caller_user,
+        store_memory=body.store,
+        cancellation_token=cancel_token
+    )
+    ws_manager.register_active_task(session_id, ctx, task_id=task_id, user_id=caller_user)
+
     try:
-        # Run Action-First execution
-        result_text = brain.execute_task(body.task)
+        # P0-2: Deliver task initiation strictly to owning session if available (never broadcast)
+        start_event = {
+            "type": "execution_event",
+            "event_type": "task_started",
+            "goal": body.task,
+            "task_id": task_id,
+            "node_id": "root",
+            "description": body.task,
+            "status": "running"
+        }
+        if session_id:
+            await ws_manager.send_to_session(session_id, start_event)
+        else:
+            log.info(f"[Task Execution] Task {task_id} started without session - skipping websocket delivery.")
+
+        # Run Action-First execution via AssistantOrchestrator
+        result_text = await asyncio.to_thread(brain.execute_task, body.task, body.store, ctx)
+
+        # P0-3 & P0-6: Derive completed and status string from actual AssistantTask
+        from core.brain.task_model import map_task_status_to_api
+        actual_task = getattr(ctx, "task", None)
+        real_task_id = getattr(actual_task, "task_id", None) or getattr(actual_task, "id", None) or task_id
+        status_enum = getattr(actual_task, "status", None)
+        completed, status_str = map_task_status_to_api(status_enum, is_cancelled=cancel_token.is_set())
+
+        # P0-2: Deliver task completion strictly to owning session if available (never broadcast)
+        completion_event = {
+            "type": "execution_event",
+            "event_type": "task_completed",
+            "goal": body.task,
+            "task_id": real_task_id,
+            "node_id": "root",
+            "description": body.task,
+            "status": status_str,
+            "result": result_text[:200]
+        }
+        if session_id:
+            await ws_manager.send_to_session(session_id, completion_event)
+        else:
+            log.info(f"[Task Execution] Task {real_task_id} completed without session - skipping websocket delivery.")
 
         return TaskResponse(
             task      = body.task,
-            completed = True,
+            completed = completed,
+            status    = status_str,
+            task_id   = real_task_id,
             steps     = [
                 TaskStepResult(
                     index       = 0,
-                    description = "Action-First Execution Engine",
-                    status      = "success",
+                    description = "AssistantOrchestrator Canonical Execution Engine",
+                    status      = status_str,
                     result      = result_text,
                 )
             ],
@@ -405,6 +709,152 @@ async def execute_task(body: TaskRequest, auth: AuthRequired):
     except Exception as e:
         error_log.error(f"/task error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        ws_manager.unregister_active_task(session_id, task_obj=ctx)
+        ws_manager.unregister_active_task(task_id, task_obj=ctx)
+        actual_task = getattr(ctx, "task", None)
+        if actual_task and getattr(actual_task, "task_id", None):
+            ws_manager.unregister_active_task(actual_task.task_id, task_obj=actual_task)
+
+
+class TaskInterruptRequest(BaseModel):
+    task_id: Optional[str] = None
+    session_id: Optional[str] = None
+    reason: str = "User requested cancellation"
+
+
+@app.post("/tasks/interrupt", response_model=SuccessResponse, tags=["Tasks"])
+async def interrupt_task(body: TaskInterruptRequest, auth: AuthRequired):
+    """Cancel an active task or session execution with strict fail-closed user AND session ownership validation (P1-5)."""
+    caller_user = _extract_auth_user(auth)
+    caller_session = _extract_auth_session(auth)
+
+    if not caller_user or not caller_session:
+        raise HTTPException(status_code=403, detail="Forbidden: Caller identity metadata is incomplete.")
+
+    if body.task_id:
+        # Cancel by task_id: resolve owner metadata by task_id
+        meta = ws_manager.get_task_metadata(body.task_id)
+        if not meta:
+            # Unknown task -> nothing cancelled
+            return SuccessResponse(message="No active task found for the specified task ID.")
+
+        task_owner_user = meta.get("user_id")
+        task_owner_session = meta.get("session_id")
+
+        if not task_owner_user or not task_owner_session:
+            raise HTTPException(status_code=403, detail="Forbidden: Task ownership metadata is absent or incomplete.")
+
+        if task_owner_user != caller_user:
+            raise HTTPException(status_code=403, detail="Forbidden: Cannot interrupt another user's task.")
+        if task_owner_session != caller_session:
+            raise HTTPException(status_code=403, detail="Forbidden: Cannot interrupt a task belonging to another session.")
+
+        cancelled = ws_manager.cancel_active_task(body.task_id, reason=body.reason)
+        target_task_id = body.task_id
+        target_session_id = task_owner_session
+    else:
+        # Cancel by session: use server-side identity and strictly ignore spoofed client session IDs
+        meta = ws_manager.get_task_metadata(caller_session)
+        if not meta:
+            return SuccessResponse(message="No active task found for the specified session.")
+
+        task_owner_user = meta.get("user_id")
+        task_owner_session = meta.get("session_id")
+
+        if not task_owner_user or not task_owner_session:
+            raise HTTPException(status_code=403, detail="Forbidden: Task ownership metadata is absent or incomplete.")
+
+        if task_owner_user != caller_user:
+            raise HTTPException(status_code=403, detail="Forbidden: Cannot interrupt another user's session.")
+        if task_owner_session != caller_session:
+            raise HTTPException(status_code=403, detail="Forbidden: Cannot interrupt a task belonging to another session.")
+
+        cancelled = ws_manager.cancel_active_task(caller_session, reason=body.reason)
+        target_task_id = meta.get("task_id")
+        target_session_id = caller_session
+
+    if not cancelled:
+        return SuccessResponse(message="No active task found for the specified session or task ID.")
+
+    # P0-3: Send cancellation event strictly to authorized session (no global broadcast)
+    if target_session_id:
+        await ws_manager.send_to_session(target_session_id, {
+            "type": "TASK_CANCELLED",
+            "task_id": target_task_id,
+            "session_id": target_session_id,
+            "cancelled": cancelled
+        })
+    return SuccessResponse(message="Task cancellation signalled.")
+
+
+@app.get("/tasks/history", tags=["Tasks"])
+async def get_task_history(auth: AuthRequired, limit: int = 50):
+    """Retrieve persisted multi-step task history across application restarts, filtered by authenticated owner."""
+    caller_user = _extract_auth_user(auth)
+    caller_session = _extract_auth_session(auth)
+    from core.brain.task_store import task_store
+    tasks = task_store.list_tasks(limit=limit, user_id=caller_user, session_id=caller_session)
+    return {"tasks": tasks}
+
+
+@app.get("/tasks/{task_id}", tags=["Tasks"])
+async def get_task_detail(task_id: str, auth: AuthRequired):
+    """Retrieve a specific persisted task record by ID, enforcing strict user and session ownership."""
+    caller_user = _extract_auth_user(auth)
+    caller_session = _extract_auth_session(auth)
+    from core.brain.task_store import task_store
+    task = task_store.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    task_user = task.get("user_id")
+    task_session = task.get("session_id")
+
+    # P0-3: Fail closed: task detail must not be returned when ownership metadata is missing or incomplete
+    if not task_user or not task_session:
+        raise HTTPException(status_code=403, detail="Forbidden: Task ownership metadata is missing or incomplete.")
+
+    if task_user != caller_user:
+        raise HTTPException(status_code=403, detail="Forbidden: Task belongs to another user.")
+    if task_session != caller_session:
+        raise HTTPException(status_code=403, detail="Forbidden: Task belongs to another session.")
+
+    return task
+
+
+# ─── Security Confirmation Routes ─────────────────────────────────────────────
+
+class ConfirmationRequest(BaseModel):
+    approved: bool
+
+
+@app.get("/security/confirmations", tags=["Security"])
+async def list_pending_confirmations(auth: AuthRequired):
+    """List active security confirmations strictly for caller authorization (P0-3)."""
+    from core.security import guard
+    caller_user = _extract_auth_user(auth)
+    caller_session = _extract_auth_session(auth)
+    confirmations = guard.get_pending_confirmations(user_id=caller_user, session_id=caller_session)
+    return {"confirmations": confirmations}
+
+
+@app.post("/security/confirmations/{confirmation_id}", tags=["Security"])
+async def respond_confirmation(confirmation_id: str, body: ConfirmationRequest, auth: AuthRequired):
+    """Approve or deny a pending security confirmation with server-side identity validation (P0-2)."""
+    from core.security import guard
+    caller_user = _extract_auth_user(auth)
+    caller_session = _extract_auth_session(auth)
+    success = guard.submit_confirmation(
+        confirmation_id,
+        body.approved,
+        session_id=caller_session,
+        user_id=caller_user
+    )
+    if not success:
+        raise HTTPException(status_code=403, detail="Confirmation ID not found, expired, or unauthorized.")
+    return SuccessResponse(message=f"Confirmation {'approved' if body.approved else 'denied'}.")
+
 
 
 # ─── Static UI Serving ────────────────────────────────────────────────────────
@@ -422,12 +872,14 @@ if ui_path.exists():
 
 @app.post("/memory/search", response_model=MemorySearchResponse, tags=["Memory"])
 async def search_memory(body: MemorySearchRequest, auth: AuthRequired):
-    """Semantically search stored memories."""
+    """Semantically search stored memories scoped to caller user (P0-2)."""
+    caller_user = _extract_auth_user(auth)
     memory  = _get_memory()
     results = memory.retrieve_memories(
         body.query,
         top_k    = body.top_k,
         category = body.category.value if body.category else None,
+        user_id  = caller_user,
     )
     return MemorySearchResponse(
         query   = body.query,
@@ -447,30 +899,34 @@ async def search_memory(body: MemorySearchRequest, auth: AuthRequired):
 
 @app.post("/memory", response_model=SuccessResponse, tags=["Memory"])
 async def store_memory(body: MemoryStoreRequest, auth: AuthRequired):
-    """Store a new memory entry."""
+    """Store a new memory entry with explicit caller ownership (P0-2)."""
+    caller_user = _extract_auth_user(auth)
     memory = _get_memory()
     doc_id = memory.store_memory(
         body.content,
         category = body.category.value,
         metadata = body.metadata,
         encrypt  = body.encrypt,
+        user_id  = caller_user,
     )
     return SuccessResponse(message=f"Memory stored with ID: {doc_id}")
 
 
 @app.post("/memory/preference", response_model=SuccessResponse, tags=["Memory"])
 async def set_preference(body: PreferenceSetRequest, auth: AuthRequired):
-    """Store or update an owner preference."""
+    """Store or update a user preference (P0-2)."""
+    caller_user = _extract_auth_user(auth)
     memory = _get_memory()
-    memory.store_preference(body.key, body.value)
+    memory.store_preference(body.key, body.value, user_id=caller_user)
     return SuccessResponse(message=f"Preference '{body.key}' saved.")
 
 
 @app.get("/memory/preference/{key}", tags=["Memory"])
 async def get_preference(key: str, auth: AuthRequired):
-    """Retrieve a stored preference by key."""
+    """Retrieve a stored preference by key for caller user (P0-2)."""
+    caller_user = _extract_auth_user(auth)
     memory = _get_memory()
-    value  = memory.get_preference(key)
+    value  = memory.get_preference(key, user_id=caller_user)
     if value is None:
         raise HTTPException(status_code=404, detail=f"Preference '{key}' not found.")
     return {"key": key, "value": value}
@@ -479,17 +935,23 @@ async def get_preference(key: str, auth: AuthRequired):
 @app.delete("/memory", response_model=SuccessResponse, tags=["Memory"])
 async def clear_memory(auth: AuthRequired, confirm: bool = False):
     """
-    Clear ALL memory. DESTRUCTIVE.
+    Clear caller user's memory (P0-2). DESTRUCTIVE.
     Must pass `?confirm=true` query parameter to execute.
     """
     if not confirm:
         raise HTTPException(
             status_code=400,
-            detail="Safety check: pass ?confirm=true to confirm full memory wipe.",
+            detail="Safety check: pass ?confirm=true to confirm memory wipe.",
+        )
+    caller_user = _extract_auth_user(auth)
+    if not caller_user:
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized: Verified user identity required to clear memory.",
         )
     memory = _get_memory()
-    memory.clear_all()
-    return SuccessResponse(message="All memory cleared.")
+    memory.clear_all(user_id=caller_user)
+    return SuccessResponse(message="User memory cleared.")
 
 
 # ─── System Routes ────────────────────────────────────────────────────────────
@@ -497,6 +959,7 @@ async def clear_memory(auth: AuthRequired, confirm: bool = False):
 @app.get("/status", response_model=SystemStatus, tags=["System"])
 async def get_status(auth: AuthRequired):
     """Return current system health and resource status."""
+    caller_user = _extract_auth_user(auth)
     brain  = _get_brain()
     memory = _get_memory()
     b_status = brain.status()
@@ -505,14 +968,17 @@ async def get_status(auth: AuthRequired):
         tools_count    = b_status["tools_count"],
         memory_active  = b_status["memory_active"],
         planner_active = b_status["planner_active"],
-        memory_stats   = memory.stats(),
+        memory_stats   = memory.stats(user_id=caller_user),
         uptime_seconds = round(time.time() - _START_TIME, 1),
     )
 
 
 @app.get("/", tags=["System"])
 async def root():
-    """API root — health check."""
+    """API root — serves the Mission Control UI dashboard."""
+    ui_path = Path(__file__).parent.parent / "ui" / "index.html"
+    if ui_path.exists():
+        return FileResponse(ui_path, media_type="text/html")
     return {
         "name":    "JARVIS AI Operating System",
         "version": "3.0.0",
@@ -573,14 +1039,232 @@ async def get_metrics(auth: AuthRequired):
 
 @app.post("/optimize", response_model=SuccessResponse, tags=["Agents"])
 async def trigger_optimization(auth: AuthRequired):
-    """Trigger the Refiner Agent to optimize recent workflows."""
+    """Trigger the Refiner Agent to optimize recent workflows scoped to the authenticated caller owner (P0-1, P0-4)."""
+    caller_user = _extract_auth_user(auth)
+    caller_session = _extract_auth_session(auth)
+    if not caller_user:
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized: Verified user identity required for workflow optimization."
+        )
+
     brain = _get_brain()
     if hasattr(brain, '_refiner') and brain._refiner:
         from core.agents.base_agent import AgentMessage
-        msg = AgentMessage(sender="system", recipient="refiner", content="optimize")
+        msg = AgentMessage(
+            sender=caller_user,
+            recipient="refiner",
+            content="optimize",
+            user_id=caller_user,
+            session_id=caller_session,
+            system_authorized=False,
+        )
         res = brain._refiner.process(msg)
         if res.success:
             return SuccessResponse(message=res.content)
         else:
             raise HTTPException(status_code=500, detail=res.content)
     raise HTTPException(status_code=503, detail="Refiner Agent not available.")
+
+
+# ─── Onboarding & Diagnostics Routes ──────────────────────────────────────────
+
+_DIAGNOSTICS_CACHE: dict[str, Any] = {"data": None, "timestamp": 0.0}
+
+def _check_diagnostics_internal() -> dict[str, Any]:
+    now = time.time()
+    if _DIAGNOSTICS_CACHE["data"] and (now - _DIAGNOSTICS_CACHE["timestamp"]) < 5.0:
+        return _DIAGNOSTICS_CACHE["data"]
+
+    import os
+    from datetime import datetime, timezone
+
+    # 1. LLM Readiness
+    has_gemini = bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
+    has_fallback = bool(os.environ.get("GROQ_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("OLLAMA_HOST"))
+    llm_ready = has_gemini or has_fallback
+    if has_gemini:
+        llm_details = "Google Gemini API key configured and operational."
+    elif has_fallback:
+        llm_details = "Fallback LLM engine key configured."
+    else:
+        llm_details = "No LLM API key detected in .env. Configure GEMINI_API_KEY."
+
+    # 2. Voice STT Readiness
+    voice_stt_ready = False
+    stt_details = ""
+    try:
+        import faster_whisper
+        voice_stt_ready = True
+        stt_details = "faster-whisper STT engine installed and operational."
+    except Exception as e:
+        stt_details = f"faster-whisper not available: {e}"
+
+    # 3. Voice TTS Readiness
+    voice_tts_ready = False
+    tts_details = ""
+    try:
+        import pyttsx3
+        voice_tts_ready = True
+        tts_details = "pyttsx3 native speech synthesis operational."
+    except Exception as e:
+        tts_details = f"TTS engine error: {e}"
+
+    # 4. Playwright Browser Readiness
+    browser_ready = False
+    browser_details = ""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            exec_path = p.chromium.executable_path
+            if exec_path and os.path.exists(exec_path):
+                browser_ready = True
+                browser_details = f"Playwright Chromium browser ready at {exec_path}."
+            else:
+                browser_details = "Playwright Chromium binary not found on disk."
+    except Exception as e:
+        browser_details = f"Playwright browser check: {e}"
+
+    # 5. Windows Native OCR Readiness
+    ocr_ready = False
+    ocr_details = ""
+    try:
+        import winocr
+        ocr_ready = True
+        ocr_details = "Windows Native OCR (winocr) available."
+    except Exception as e:
+        ocr_details = f"winocr not available: {e}"
+
+    all_ready = llm_ready and voice_stt_ready and voice_tts_ready and browser_ready and ocr_ready
+
+    data = {
+        "all_ready": all_ready,
+        "llm_ready": llm_ready,
+        "voice_stt_ready": voice_stt_ready,
+        "voice_tts_ready": voice_tts_ready,
+        "browser_ready": browser_ready,
+        "ocr_ready": ocr_ready,
+        "diagnostics": {
+            "llm": {"ready": llm_ready, "details": llm_details, "optional": False},
+            "voice_stt": {"ready": voice_stt_ready, "details": stt_details, "optional": False},
+            "voice_tts": {"ready": voice_tts_ready, "details": tts_details, "optional": False},
+            "browser": {"ready": browser_ready, "details": browser_details, "optional": True},
+            "ocr": {"ready": ocr_ready, "details": ocr_details, "optional": True},
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    _DIAGNOSTICS_CACHE["data"] = data
+    _DIAGNOSTICS_CACHE["timestamp"] = now
+    return data
+
+
+@app.get("/onboarding/diagnostics", response_model=OnboardingDiagnosticsResponse, tags=["Onboarding"])
+async def get_onboarding_diagnostics(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme)
+):
+    """
+    Returns real-time readiness checks for LLM, Voice STT, Voice TTS, Browser, and OCR.
+    Accessible without credentials on initial setup or with Bearer token.
+    """
+    from core.security import PIN_FILE
+    if PIN_FILE.exists() and credentials:
+        from api.auth import decode_token
+        decode_token(credentials.credentials)
+    data = await asyncio.to_thread(_check_diagnostics_internal)
+    return OnboardingDiagnosticsResponse(**data)
+
+
+@app.post("/onboarding/configure", response_model=OnboardingConfigureResponse, tags=["Onboarding"])
+async def configure_onboarding(
+    body: OnboardingConfigureRequest,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme)
+):
+    """
+    Allows first-run configuration of user name, preferred city, API key, and Owner PIN.
+    If an Owner PIN is already configured, authentication is strictly required.
+    """
+    from core.security import PIN_FILE
+    if PIN_FILE.exists():
+        if not credentials:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required to modify existing system configuration.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        from api.auth import decode_token
+        if not decode_token(credentials.credentials):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired token.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+    configured_items: list[str] = []
+    user_prefs_file = Path(r"D:\Jarvis\data\user_preferences.json")
+    user_prefs_file.parent.mkdir(parents=True, exist_ok=True)
+    prefs_data = {}
+    if user_prefs_file.exists():
+        try:
+            with open(user_prefs_file, "r", encoding="utf-8") as f:
+                prefs_data = json.load(f)
+        except Exception:
+            prefs_data = {}
+
+    # 1. User Name
+    if body.user_name:
+        prefs_data["user_name"] = body.user_name.strip()
+        configured_items.append("user_name")
+
+    # 2. Preferred City
+    if body.preferred_city:
+        prefs_data["preferred_city"] = body.preferred_city.strip()
+        configured_items.append("preferred_city")
+
+    if body.user_name or body.preferred_city:
+        with open(user_prefs_file, "w", encoding="utf-8") as f:
+            json.dump(prefs_data, f, indent=2)
+
+    # 3. Gemini API Key
+    if body.gemini_api_key:
+        api_key = body.gemini_api_key.strip()
+        if len(api_key) > 5:
+            env_file = Path(r"D:\Jarvis\.env")
+            lines = []
+            found = False
+            if env_file.exists():
+                with open(env_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        stripped = line.strip()
+                        if stripped.startswith("GEMINI_API_KEY=") or stripped.startswith("export GEMINI_API_KEY="):
+                            lines.append(f"GEMINI_API_KEY={api_key}\n")
+                            found = True
+                        else:
+                            lines.append(line)
+            if not found:
+                lines.append(f"GEMINI_API_KEY={api_key}\n")
+            with open(env_file, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+            import os
+            os.environ["GEMINI_API_KEY"] = api_key
+            masked = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) >= 8 else "***"
+            log.info(f"Configured GEMINI_API_KEY securely (masked: {masked})")
+            configured_items.append("gemini_api_key")
+
+    # 4. Owner PIN
+    if body.owner_pin:
+        if len(body.owner_pin) < 4:
+            raise HTTPException(status_code=400, detail="Owner PIN must be at least 4 characters.")
+        owner_auth.set_pin(body.owner_pin)
+        configured_items.append("owner_pin")
+
+    # Invalidate diagnostic cache after configuration
+    _DIAGNOSTICS_CACHE["data"] = None
+
+    msg = f"Successfully configured: {', '.join(configured_items)}" if configured_items else "No configuration changes requested."
+    return OnboardingConfigureResponse(
+        success=True,
+        message=msg,
+        configured_items=configured_items
+    )
+
+

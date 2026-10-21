@@ -75,6 +75,8 @@ class ChatResponse(BaseModel):
 class TaskRequest(BaseModel):
     task:    str  = Field(..., min_length=1, max_length=5_000, description="Task description")
     verbose: bool = Field(True, description="Print step-by-step progress")
+    store:   bool = Field(True, description="Store task outcome in memory")
+
 
 
 class TaskStepResult(BaseModel):
@@ -91,6 +93,8 @@ class TaskResponse(BaseModel):
     completed: bool
     steps:     List[TaskStepResult]
     summary:   str
+    task_id:   Optional[str] = None
+    status:    Optional[str] = "success"
 
 
 # ─── Memory ───────────────────────────────────────────────────────────────────
@@ -221,4 +225,37 @@ class AgentSystemStatus(BaseModel):
     agents:       List[AgentStatusModel]
     bus_messages:  int = 0
     total_agents:  int = 0
+
+
+# ─── Onboarding & Diagnostics ───────────────────────────────────────────────
+
+class DiagnosticItem(BaseModel):
+    ready: bool
+    details: str
+    optional: bool = False
+
+
+class OnboardingDiagnosticsResponse(BaseModel):
+    all_ready: bool
+    llm_ready: bool
+    voice_stt_ready: bool
+    voice_tts_ready: bool
+    browser_ready: bool
+    ocr_ready: bool
+    diagnostics: dict[str, DiagnosticItem]
+    timestamp: str
+
+
+class OnboardingConfigureRequest(BaseModel):
+    user_name: Optional[str] = Field(None, max_length=100, description="Preferred display name for user")
+    preferred_city: Optional[str] = Field(None, max_length=100, description="City for daily weather and briefing")
+    gemini_api_key: Optional[str] = Field(None, max_length=200, description="Optional Google Gemini API key")
+    owner_pin: Optional[str] = Field(None, min_length=4, max_length=64, description="Optional Owner PIN for system lock")
+
+
+class OnboardingConfigureResponse(BaseModel):
+    success: bool
+    message: str
+    configured_items: List[str]
+
 

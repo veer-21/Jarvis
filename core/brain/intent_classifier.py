@@ -59,12 +59,12 @@ class IntentClassifier:
              "execute_command", self._extract_close_app),
 
             # Web search
-            (re.compile(r"^(?:search|google|search (?:google |the web )?for)\s+(.+)$", re.IGNORECASE),
-             "open_url", self._extract_search),
+            (re.compile(r"^(?:search (?:google |the web )?for|search (?:google|the web)|search for|search|google)\s+(.+)$", re.IGNORECASE),
+             "_open_url_local", self._extract_search),
 
             # Type text
-            (re.compile(r"^(?:type|write)\s+(.+)$", re.IGNORECASE),
-             "type_text", self._extract_type_text),
+            (re.compile(r"^(type|write)\s+(.+)$", re.IGNORECASE),
+             self._route_type_or_write),
 
             # Key presses
             (re.compile(r"^(?:press|hit)\s+(.+)$", re.IGNORECASE),
@@ -99,7 +99,7 @@ class IntentClassifier:
              "list_directory", lambda m: {"path": "."}),
 
             # Time
-            (re.compile(r"^(?:what(?:'s| is) the time|what time is it|current time|time)[\??]?$", re.IGNORECASE),
+            (re.compile(r"^(?:what(?:'s| is) the time|what time is it|current time|time)(?: right now)?[\??]?$", re.IGNORECASE),
              "_local_time", lambda m: {}),
 
             # Date
@@ -109,6 +109,37 @@ class IntentClassifier:
             # Weather
             (re.compile(r"^(?:what(?:'s| is) the weather|weather|how is the weather|what is the weather like)(?: right now| today| outside)?[\??]?$", re.IGNORECASE),
              "get_weather", lambda m: {"location": ""}),
+
+            # Everyday Consumer Tools (Phase 4.1)
+            # Folder organization & undo
+            (re.compile(r"^(?:clean up|organize|declutter)\s+(?:my\s+)?(downloads|desktop|documents)(?:\s+folder)?$", re.IGNORECASE),
+             "smart_organize_folder", lambda m: {"directory_path": m.group(1)}),
+            (re.compile(r"^(?:undo|rollback)\s+(?:folder\s+)?(?:organization|cleanup)(?:\s+(?:for|in)\s+(.+))?$", re.IGNORECASE),
+             "undo_folder_organization", lambda m: {"directory_path": m.group(1) or "Downloads"}),
+
+            # Reminders & Timers
+            (re.compile(r"^remind\s+me\s+in\s+(\d+)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\s+(?:to\s+)?(.+)$", re.IGNORECASE),
+             "create_reminder_or_timer", self._extract_reminder_in),
+            (re.compile(r"^set\s+(?:a\s+)?(?:timer|reminder)\s+for\s+(\d+)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\s*(?:to\s+)?(.*)$", re.IGNORECASE),
+             "create_reminder_or_timer", self._extract_timer_for),
+            (re.compile(r"^(?:list|show|check)\s+(?:my\s+)?(?:reminders|timers)$", re.IGNORECASE),
+             "list_and_manage_reminders", lambda m: {"action": "list"}),
+            (re.compile(r"^cancel\s+reminder\s+([a-zA-Z0-9_\-]+)$", re.IGNORECASE),
+             "list_and_manage_reminders", lambda m: {"action": "cancel", "reminder_id": m.group(1)}),
+
+            # Daily Briefing
+            (re.compile(r"^(?:give me (?:my )?|what is (?:my )?|show (?:my )?)?(?:daily|morning) briefing$", re.IGNORECASE),
+             "generate_daily_briefing", lambda m: {"city": "auto"}),
+
+            # Everyday Windows settings
+            (re.compile(r"^(?:open\s+task\s+manager|taskmgr)$", re.IGNORECASE),
+             "control_windows_setting", lambda m: {"setting": "open_task_manager"}),
+            (re.compile(r"^(?:open\s+settings|windows\s+settings)$", re.IGNORECASE),
+             "control_windows_setting", lambda m: {"setting": "open_settings"}),
+            (re.compile(r"^empty\s+(?:the\s+)?recycle\s+bin$", re.IGNORECASE),
+             "control_windows_setting", lambda m: {"setting": "empty_recycle_bin"}),
+            (re.compile(r"^(?:read|get)\s+clipboard$", re.IGNORECASE),
+             "control_windows_setting", lambda m: {"setting": "clipboard_get"}),
         ]
 
     def classify(self, text: str) -> Optional[Tuple[str, Dict[str, Any]]]:
@@ -169,7 +200,7 @@ class IntentClassifier:
             result = pattern.sub('', result).strip()
 
         # Remove trailing fillers
-        for filler in ["please", "for me", "now"]:
+        for filler in ["please", "for me", "right now", "now"]:
             pattern = re.compile(r'\s+' + re.escape(filler) + r'$', re.IGNORECASE)
             result = pattern.sub('', result).strip()
 
@@ -192,6 +223,15 @@ class IntentClassifier:
             if target == shortcut or target == f"the {shortcut}" or target == f"my {shortcut}":
                 return "_open_url_local", {"url": url}
 
+        # If it looks like a URL
+        if target.startswith(("http://", "https://", "www.")) or target.endswith((".com", ".org", ".io", ".net", ".edu")):
+            url = target if target.startswith("http") else f"https://{target}"
+            return "_open_url_local", {"url": url}
+
+        # If target is a compound phrase or action (e.g., 'a webpage and read its content'), delegate to planner/LLM
+        if " and " in target or any(w in target for w in ("webpage", "website", "link")):
+            return None
+
         # Otherwise, launch as application
         return "open_application", {"app_name": target}
 
@@ -204,7 +244,51 @@ class IntentClassifier:
     def _extract_search(self, match: re.Match) -> Dict[str, Any]:
         query = match.group(1).strip()
         import urllib.parse
-        return {"_open_url_local": f"https://www.google.com/search?q={urllib.parse.quote_plus(query)}"}
+        return {"url": f"https://www.google.com/search?q={urllib.parse.quote_plus(query)}"}
+
+    def _route_type_or_write(self, match: re.Match) -> Optional[Tuple[str, Dict[str, Any]]]:
+        action = match.group(1).lower()
+        content = match.group(2).strip()
+
+        if not content:
+            return None
+
+        # Content generation keywords indicating programming, writing tasks, or inquiries
+        gen_keywords = {
+            "script", "code", "python", "function", "class", "program", "app", 
+            "test", "tests", "file", "email", "letter", "essay", "story", 
+            "summary", "poem", "doc", "documentation", "query", "article",
+            "report", "note", "message", "response", "solution", "algorithm",
+            "javascript", "typescript", "rust", "c++", "java", "sql", "html"
+        }
+
+        # Check for explicit typing phrases like 'type hello into the current application'
+        cleaned_text = re.sub(
+            r"\s+into\s+(?:the\s+)?(?:current\s+)?(?:application|window|app|editor|terminal|document)$",
+            "",
+            content,
+            flags=re.IGNORECASE
+        ).strip()
+
+        # If quoted, it's explicitly literal text to type
+        is_quoted = (cleaned_text.startswith('"') and cleaned_text.endswith('"')) or \
+                    (cleaned_text.startswith("'") and cleaned_text.endswith("'"))
+        if is_quoted and len(cleaned_text) >= 2:
+            return "type_text", {"text": cleaned_text[1:-1]}
+
+        # If the user used 'write', check if it's code/content generation
+        if action == "write":
+            words = set(re.findall(r"\b[a-zA-Z]+\b", content.lower()))
+            if words & gen_keywords or content.lower().startswith(("a ", "an ", "the ", "some ", "me ")):
+                # Return None so it falls through to LLM / GoalExecutor
+                return None
+
+        # If action is 'type', also check if words look like a request to write code
+        words = set(re.findall(r"\b[a-zA-Z]+\b", content.lower()))
+        if (words & {"script", "python", "code", "program"}) and content.lower().startswith(("a ", "an ")):
+            return None
+
+        return "type_text", {"text": cleaned_text}
 
     def _extract_type_text(self, match: re.Match) -> Dict[str, Any]:
         return {"text": match.group(1).strip()}
@@ -227,6 +311,30 @@ class IntentClassifier:
         }
         resolved = key_map.get(keys, keys)
         return {"keys": resolved}
+
+    def _extract_reminder_in(self, match: re.Match) -> Dict[str, Any]:
+        val = int(match.group(1))
+        unit = match.group(2).lower()
+        multiplier = 60
+        if unit.startswith("s"):
+            multiplier = 1
+        elif unit.startswith("h"):
+            multiplier = 3600
+        seconds = val * multiplier
+        title = match.group(3).strip()
+        return {"title": title, "trigger_in_seconds": seconds, "message": title}
+
+    def _extract_timer_for(self, match: re.Match) -> Dict[str, Any]:
+        val = int(match.group(1))
+        unit = match.group(2).lower()
+        multiplier = 60
+        if unit.startswith("s"):
+            multiplier = 1
+        elif unit.startswith("h"):
+            multiplier = 3600
+        seconds = val * multiplier
+        title = match.group(3).strip() if match.group(3) else f"Timer for {val} {unit}"
+        return {"title": title, "trigger_in_seconds": seconds, "message": title}
 
     # ─── Local Built-in Functions ─────────────────────────────────────────────
 

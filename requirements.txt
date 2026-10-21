@@ -39,27 +39,28 @@ psutil>=6.0.0                   # CPU, RAM, disk, network stats
 # ── Web / HTTP ────────────────────────────────────────────────
 requests>=2.32.0                # HTTP requests
 beautifulsoup4>=4.12.0          # HTML parsing / web scraping
-duckduckgo-search>=6.3.0        # Web + news search (no API key)
+ddgs>=9.16.0                    # Web + news search (modern DuckDuckGo engine)
+pypdf>=5.0.0                    # PDF document text extraction
+python-docx>=1.0.0              # Word document text extraction
 
 # ── Environment & Config ──────────────────────────────────────
 python-dotenv>=1.0.0            # .env file loading
 
 # ── Optional: Local Whisper STT ──────────────────────────────
 # Uncomment to enable local offline speech recognition:
-openai-whisper>=20240930
-torch>=2.4.0
+# openai-whisper>=20240930
+# torch>=2.4.0
 
 # ── Optional: Vision / OCR ───────────────────────────────────
-# Uncomment to enable screen understanding:
-# opencv-python>=4.10.0
-# pytesseract>=0.3.13
-# easyocr>=1.7.0
+# Uncomment to enable screen understanding / OCR:
+# winocr>=1.0.0                 # Windows 10/11 native OCR
+# easyocr>=1.7.0                # Cross-platform OCR
+# pytesseract>=0.3.13           # Tesseract OCR engine
 
 # ── Optional: ElevenLabs TTS ─────────────────────────────────
 # Uncomment for premium neural voice:
-elevenlabs>=1.9.0
+# elevenlabs>=1.9.0
 
-# ── Dev / Testing ─────────────────────────────────────────────
-# pytest>=8.0.0
-# pytest-asyncio>=0.23.0
-# httpx>=0.27.0                 # Test FastAPI without a running server
+# ── Testing Dependencies ──────────────────────────────────────
+# See requirements-test.txt:
+# pip install -r requirements-test.txt

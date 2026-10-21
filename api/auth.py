@@ -34,6 +34,7 @@ TOKEN_EXPIRE  = int(os.environ.get("JARVIS_TOKEN_EXPIRE_HOURS", "12"))  # hours
 
 # Simple in-memory token store as fallback when PyJWT is not available
 _active_tokens: set[str] = set()
+_active_tokens_meta: dict[str, dict] = {}
 
 # HTTP Bearer scheme for FastAPI
 _bearer_scheme = HTTPBearer(auto_error=False)
@@ -41,32 +42,37 @@ _bearer_scheme = HTTPBearer(auto_error=False)
 
 # ─── Token Management ─────────────────────────────────────────────────────────
 
-def create_access_token(subject: str = "owner") -> tuple[str, int]:
+def create_access_token(subject: str = "owner", session_id: Optional[str] = None) -> tuple[str, int]:
     """
-    Generate a signed JWT access token.
+    Generate a signed JWT access token bound to subject and optional session_id.
 
     Returns:
         (token_string, expires_in_seconds)
     """
     expire_seconds = TOKEN_EXPIRE * 3600
+    jti = secrets.token_urlsafe(16)
+    sess_id = session_id or f"sess_{jti[:8]}"
 
     if HAS_JWT:
         expire_dt = datetime.now(timezone.utc) + timedelta(seconds=expire_seconds)
         payload = {
             "sub":  subject,
+            "session_id": sess_id,
             "iat":  datetime.now(timezone.utc),
             "exp":  expire_dt,
-            "jti":  secrets.token_urlsafe(16),
+            "jti":  jti,
         }
         token = pyjwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
     else:
         # Fallback: opaque random token
         token = secrets.token_urlsafe(48)
         _active_tokens.add(token)
+        _active_tokens_meta[token] = {"sub": subject, "session_id": sess_id, "jti": jti}
 
     audit_log.info({
         "event":      "TOKEN_ISSUED",
         "subject":    subject,
+        "session_id": sess_id,
         "expires_in": expire_seconds,
         "timestamp":  datetime.now(timezone.utc).isoformat(),
     })
@@ -92,7 +98,9 @@ def decode_token(token: str) -> Optional[dict]:
             return None
     else:
         # Fallback: check opaque token set
-        return {"sub": "owner"} if token in _active_tokens else None
+        if token in _active_tokens:
+            return _active_tokens_meta.get(token, {"sub": "owner", "session_id": "sess_default"})
+        return None
 
 
 def revoke_token(token: str) -> None:
