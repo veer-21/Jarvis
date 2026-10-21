@@ -693,6 +693,120 @@
            padding: 12px; border-radius: 4px; overflow-x: auto; margin: 8px 0;
            font-family: var(--font-code); font-size: 0.78rem; line-height: 1.5; }
 
+    /* ═══════════════════════════════════════════════════════
+       EVERYDAY CONSUMER MODE & MODALS
+    ═══════════════════════════════════════════════════════ */
+    .mode-btn {
+      background: transparent; border: none; padding: 4px 10px;
+      font-family: var(--font-hud); font-size: 0.58rem; letter-spacing: 0.1em;
+      color: var(--text-muted); cursor: pointer; border-radius: 6px; transition: all 0.2s;
+    }
+    .mode-btn.active {
+      background: var(--cyan-dim); color: var(--cyan);
+      box-shadow: 0 0 10px var(--cyan-dim);
+    }
+    body.mode-everyday #panels {
+      display: none !important;
+    }
+    body.mode-everyday #sidebar {
+      width: 240px;
+    }
+    body.mode-everyday #app {
+      grid-template-columns: 240px 1fr !important;
+      grid-template-areas: "topbar topbar" "sidebar main" !important;
+    }
+    body.mode-everyday .sidebar-section:has(#lat-wakeword) {
+      display: none !important;
+    }
+    body.mode-pro #routine-bar {
+      display: none !important;
+    }
+
+    /* 1-Click Routine Cards */
+    .routine-cards-bar {
+      padding: 16px 24px 12px;
+      border-bottom: 1px solid rgba(0, 180, 255, 0.08);
+      background: rgba(4, 14, 28, 0.5);
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .routine-header {
+      display: flex; justify-content: space-between; align-items: center;
+      font-family: var(--font-hud); font-size: 0.6rem; letter-spacing: 0.15em;
+      color: var(--cyan); text-transform: uppercase;
+    }
+    .routine-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px;
+    }
+    .routine-card {
+      background: var(--bg-glass); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 10px; cursor: pointer;
+      display: flex; flex-direction: column; gap: 4px; transition: all 0.25s;
+      text-align: left;
+    }
+    .routine-card:hover {
+      border-color: var(--cyan); transform: translateY(-2px);
+      box-shadow: 0 4px 15px var(--cyan-dim);
+      background: rgba(0, 212, 255, 0.08);
+    }
+    .routine-card-icon { font-size: 1.2rem; }
+    .routine-card-title {
+      font-family: var(--font-body); font-size: 0.75rem; font-weight: 600;
+      color: var(--text-prime);
+    }
+    .routine-card-desc {
+      font-size: 0.62rem; color: var(--text-dim); line-height: 1.2;
+    }
+
+    /* Modal Overlay (Confirmation & Onboarding) */
+    .modal-overlay {
+      position: fixed; inset: 0; z-index: 200;
+      background: rgba(2, 4, 8, 0.85); backdrop-filter: blur(16px);
+      display: flex; align-items: center; justify-content: center; padding: 20px;
+    }
+    .modal-card {
+      width: 100%; max-width: 520px;
+      background: var(--bg-panel); border: 1px solid var(--border-glow);
+      border-radius: var(--radius-md); padding: 24px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.8), var(--glow-cyan);
+      display: flex; flex-direction: column; gap: 16px;
+      animation: msgIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    .modal-header {
+      display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 1px solid var(--border); padding-bottom: 12px;
+    }
+    .modal-title {
+      font-family: var(--font-hud); font-size: 0.85rem; letter-spacing: 0.15em;
+      color: var(--cyan); display: flex; align-items: center; gap: 8px;
+    }
+    .modal-body {
+      font-size: 0.85rem; color: var(--text-prime); line-height: 1.6;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    .modal-actions {
+      display: flex; justify-content: flex-end; gap: 12px;
+      border-top: 1px solid rgba(0,180,255,0.08); padding-top: 16px;
+    }
+    .btn-approve {
+      background: linear-gradient(135deg, rgba(0,255,136,0.3), rgba(0,212,255,0.3));
+      border: 1px solid var(--green); color: var(--green);
+      border-radius: var(--radius-sm); padding: 10px 20px;
+      font-family: var(--font-hud); font-size: 0.65rem; letter-spacing: 0.12em;
+      cursor: pointer; transition: all 0.25s;
+    }
+    .btn-approve:hover {
+      background: var(--green); color: #000; box-shadow: 0 0 20px rgba(0,255,136,0.4);
+    }
+    .btn-cancel {
+      background: transparent; border: 1px solid var(--red); color: var(--red);
+      border-radius: var(--radius-sm); padding: 10px 20px;
+      font-family: var(--font-hud); font-size: 0.65rem; letter-spacing: 0.12em;
+      cursor: pointer; transition: all 0.25s;
+    }
+    .btn-cancel:hover {
+      background: rgba(255,51,68,0.2);
+    }
+
     @media (max-width: 1100px) {
       #app { grid-template-columns: 240px 1fr; grid-template-areas: "topbar topbar" "sidebar main"; }
       #panels { display: none; }
@@ -750,17 +864,24 @@
         <div class="tb-reactor-core"></div>
       </div>
       <span class="tb-title">JARVIS</span>
-      <span class="tb-ver">v3.0</span>
+      <span class="tb-ver">v4.0</span>
+
+      <!-- Mode Switch Toggle -->
+      <div style="display:flex; background:rgba(0,0,0,0.5); border:1px solid var(--border); border-radius:8px; padding:2px; margin-left:14px;">
+        <button id="btn-mode-everyday" class="mode-btn active" onclick="setUiMode('everyday')">Everyday Mode</button>
+        <button id="btn-mode-pro" class="mode-btn" onclick="setUiMode('pro')">Pro HUD Mode</button>
+      </div>
     </div>
 
     <div class="tb-center">
       <div class="tb-status-dot" id="status-dot"></div>
       <span class="tb-status-label" id="status-label">SYSTEMS ONLINE</span>
       <span class="tb-clock" id="clock"></span>
-      <span class="tb-model-badge" id="model-badge">GEMINI-2.0-FLASH</span>
+      <span class="tb-model-badge" id="model-badge">GEMINI-2.5-FLASH</span>
     </div>
 
     <div class="tb-right">
+      <button class="tb-btn" onclick="openOnboardingModal()" style="border-color:var(--cyan); color:var(--cyan);">✨ SETUP</button>
       <button class="tb-btn" onclick="refreshStatus()">⟳ SYNC</button>
       <button class="tb-btn" onclick="resetChat()">↺ RESET</button>
       <button class="tb-btn danger" onclick="logout()">LOGOUT</button>
@@ -871,6 +992,41 @@
 
   <!-- MAIN CHAT -->
   <div id="main">
+    <!-- 1-Click Routine Cards in Everyday Mode -->
+    <div class="routine-cards-bar" id="routine-bar">
+      <div class="routine-header">
+        <span>⚡ 1-Click Daily Routines</span>
+        <span style="font-size:0.55rem; color:var(--text-muted)">EVERYDAY MODE</span>
+      </div>
+      <div class="routine-grid">
+        <div class="routine-card" onclick="quickSend('Give me my daily briefing')">
+          <span class="routine-card-icon">🌅</span>
+          <span class="routine-card-title">Morning Briefing</span>
+          <span class="routine-card-desc">Weather, tasks, system stats</span>
+        </div>
+        <div class="routine-card" onclick="quickSend('Preview organizing my Downloads folder')">
+          <span class="routine-card-icon">📁</span>
+          <span class="routine-card-title">Organize Downloads</span>
+          <span class="routine-card-desc">Preview sorting files safely</span>
+        </div>
+        <div class="routine-card" onclick="quickSend('Read and summarize the text on my screen')">
+          <span class="routine-card-icon">🖥️</span>
+          <span class="routine-card-title">Read My Screen</span>
+          <span class="routine-card-desc">Summarize active window</span>
+        </div>
+        <div class="routine-card" onclick="quickSend('Remind me in 15 minutes to take a break')">
+          <span class="routine-card-icon">⏰</span>
+          <span class="routine-card-title">Quick Reminder</span>
+          <span class="routine-card-desc">15 min countdown timer</span>
+        </div>
+        <div class="routine-card" onclick="quickSend('Check my computer speed, CPU, and memory')">
+          <span class="routine-card-icon">⚡</span>
+          <span class="routine-card-title">Health Check</span>
+          <span class="routine-card-desc">Speed, CPU, and RAM</span>
+        </div>
+      </div>
+    </div>
+
     <div class="chat-area" id="chat-area">
       <!-- Messages injected here -->
     </div>
@@ -880,7 +1036,7 @@
         <button class="mic-btn" id="mic-btn" onclick="toggleMic()" title="Voice input">🎙</button>
         <button class="task-btn" id="task-btn" onclick="openTaskMode()" title="Autonomous task mode">⚡</button>
         <div class="input-wrap">
-          <textarea id="msg-input" placeholder="Command JARVIS..."
+          <textarea id="msg-input" placeholder="Ask Jarvis to organize files, summarize a document, set a reminder, or search the web..."
             rows="1" onkeydown="handleKey(event)" oninput="handleInput(event)"></textarea>
           <div class="input-actions">
             <span class="input-mode-tag" id="input-mode-tag">TEXT MODE</span>
@@ -985,6 +1141,83 @@
   </div>
 </div>
 
+<!-- Human-Friendly Security Confirmation Modal -->
+<div id="confirmation-modal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <div class="modal-header">
+      <div class="modal-title">
+        <span>🛡️</span>
+        <span>JARVIS PERMISSION REQUIRED</span>
+      </div>
+      <span id="conf-risk-badge" style="font-family:var(--font-code); font-size:0.6rem; color:var(--gold); border:1px solid var(--gold); padding:2px 8px; border-radius:4px;">CONFIRMATION REQUIRED</span>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:0.95rem; font-weight:600; color:var(--cyan);" id="conf-action-title">Proposed Action</div>
+      <p id="conf-reason-text" style="color:var(--text-dim); font-size:0.82rem; line-height:1.5;">This action makes changes on your computer. Please authorize to proceed.</p>
+      <div id="conf-params-box" style="background:rgba(0,0,0,0.5); padding:10px; border-radius:6px; font-family:var(--font-code); font-size:0.72rem; color:var(--text-dim); max-height:90px; overflow-y:auto; border:1px solid rgba(0,180,255,0.1);"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="submitConfirmation(false)">Cancel Safely</button>
+      <button class="btn-approve" onclick="submitConfirmation(true)">Approve Action</button>
+    </div>
+  </div>
+</div>
+
+<!-- First-Run Onboarding Setup Wizard Modal -->
+<div id="onboarding-modal" class="modal-overlay hidden">
+  <div class="modal-card" style="max-width:540px;">
+    <div class="modal-header">
+      <div class="modal-title">
+        <span>✨</span>
+        <span>JARVIS SETUP WIZARD</span>
+      </div>
+      <button onclick="closeOnboardingModal()" style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; font-size:1.1rem;">✕</button>
+    </div>
+    
+    <!-- Step 1: User Profile -->
+    <div class="modal-body" id="ob-step-1">
+      <p style="font-size:0.8rem; color:var(--text-dim);">Step 1 of 3: Welcome! Personalize your personal AI operating system.</p>
+      <div>
+        <label style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.1em;">Your Name</label>
+        <input type="text" id="ob-username" placeholder="e.g. Tony, Alex, Sir" style="width:100%; padding:10px 14px; background:var(--bg-glass); border:1px solid var(--border); color:var(--text-prime); border-radius:6px; margin-top:4px;" />
+      </div>
+      <div style="margin-top:10px;">
+        <label style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.1em;">Preferred City (Weather & Daily Briefing)</label>
+        <input type="text" id="ob-city" placeholder="e.g. San Francisco, London, Tokyo" style="width:100%; padding:10px 14px; background:var(--bg-glass); border:1px solid var(--border); color:var(--text-prime); border-radius:6px; margin-top:4px;" />
+      </div>
+      <div class="modal-actions" style="margin-top:12px;">
+        <button class="btn-approve" onclick="nextOnboardingStep(2)">Next: Diagnostic Check →</button>
+      </div>
+    </div>
+
+    <!-- Step 2: System Diagnostics -->
+    <div class="modal-body hidden" id="ob-step-2">
+      <p style="font-size:0.8rem; color:var(--text-dim);">Step 2 of 3: Real-time System & Hardware Readiness Check.</p>
+      <div id="ob-diag-list" style="display:flex; flex-direction:column; gap:8px;">
+        <div style="font-size:0.75rem; color:var(--text-muted);">Running diagnostic inspection...</div>
+      </div>
+      <div class="modal-actions" style="margin-top:12px;">
+        <button class="btn-cancel" onclick="nextOnboardingStep(1)">← Back</button>
+        <button class="btn-approve" onclick="nextOnboardingStep(3)">Next: Finalize →</button>
+      </div>
+    </div>
+
+    <!-- Step 3: API Key & Launch -->
+    <div class="modal-body hidden" id="ob-step-3">
+      <p style="font-size:0.8rem; color:var(--text-dim);">Step 3 of 3: Optional Google Gemini API Key.</p>
+      <div>
+        <label style="font-size:0.65rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.1em;">Google Gemini API Key (Optional)</label>
+        <input type="password" id="ob-apikey" placeholder="AIzaSy... (leave blank if already configured)" style="width:100%; padding:10px 14px; background:var(--bg-glass); border:1px solid var(--border); color:var(--text-prime); border-radius:6px; margin-top:4px;" />
+        <span style="font-size:0.65rem; color:var(--text-muted); margin-top:4px; display:block;">Keys are stored locally in your environment file and masked in logs.</span>
+      </div>
+      <div class="modal-actions" style="margin-top:12px;">
+        <button class="btn-cancel" onclick="nextOnboardingStep(2)">← Back</button>
+        <button class="btn-approve" onclick="finishOnboarding()">Complete Setup & Launch</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Toast container -->
 <div id="toast-container"></div>
 
@@ -999,6 +1232,147 @@ let isListening = false;
 let isSending   = false;
 let taskMode    = false;
 let uptimeStart = Date.now();
+
+// ── Mode Switching (Everyday vs Pro HUD) ─────────────────────
+let currentUiMode = localStorage.getItem('jarvis_ui_mode') || 'everyday';
+function setUiMode(mode) {
+  currentUiMode = mode;
+  localStorage.setItem('jarvis_ui_mode', mode);
+  document.body.classList.remove('mode-everyday', 'mode-pro');
+  document.body.classList.add(mode === 'everyday' ? 'mode-everyday' : 'mode-pro');
+  
+  const btnEv = document.getElementById('btn-mode-everyday');
+  const btnPro = document.getElementById('btn-mode-pro');
+  if (btnEv && btnPro) {
+    btnEv.classList.toggle('active', mode === 'everyday');
+    btnPro.classList.toggle('active', mode === 'pro');
+  }
+}
+setTimeout(() => setUiMode(currentUiMode), 50);
+
+// ── Human-Friendly Security Confirmation ─────────────────────
+let pendingConfirmationId = null;
+
+function showConfirmationModal(data) {
+  pendingConfirmationId = data.confirmation_id;
+  const modal = document.getElementById('confirmation-modal');
+  const titleEl = document.getElementById('conf-action-title');
+  const reasonEl = document.getElementById('conf-reason-text');
+  const badgeEl = document.getElementById('conf-risk-badge');
+  const paramsEl = document.getElementById('conf-params-box');
+
+  const actionText = data.action || (
+    data.tool === 'smart_organize_folder' ? 'Organize files in folder' :
+    data.tool === 'control_windows_setting' ? `Adjust Windows setting (${data.parameters?.setting || 'System'})` :
+    data.tool === 'drop_table' ? 'Drop Database Table' :
+    `Execute ${data.tool}`
+  );
+
+  titleEl.textContent = actionText;
+  reasonEl.textContent = data.risk_reason || 'This action makes system or disk changes. Please authorize to proceed.';
+  badgeEl.textContent = (data.risk_level || 'HIGH_RISK').toUpperCase();
+  
+  if (data.parameters && Object.keys(data.parameters).length > 0) {
+    paramsEl.innerHTML = `<pre style="margin:0; background:transparent; border:none; padding:0; color:inherit;">${escHtml(JSON.stringify(data.parameters, null, 2))}</pre>`;
+    paramsEl.classList.remove('hidden');
+  } else {
+    paramsEl.classList.add('hidden');
+  }
+
+  modal.classList.remove('hidden');
+}
+
+function submitConfirmation(approved) {
+  if (ws && ws.readyState === WebSocket.OPEN && pendingConfirmationId) {
+    ws.send(JSON.stringify({
+      command: 'confirm',
+      confirmation_id: pendingConfirmationId,
+      approved: approved,
+      token: authToken
+    }));
+  }
+  document.getElementById('confirmation-modal').classList.add('hidden');
+  pendingConfirmationId = null;
+}
+
+// ── First-Run Onboarding Setup Wizard ─────────────────────────
+function openOnboardingModal() {
+  document.getElementById('onboarding-modal').classList.remove('hidden');
+  nextOnboardingStep(1);
+}
+
+function closeOnboardingModal() {
+  document.getElementById('onboarding-modal').classList.add('hidden');
+}
+
+function nextOnboardingStep(step) {
+  document.getElementById('ob-step-1').classList.add('hidden');
+  document.getElementById('ob-step-2').classList.add('hidden');
+  document.getElementById('ob-step-3').classList.add('hidden');
+  
+  const target = document.getElementById(`ob-step-${step}`);
+  if (target) target.classList.remove('hidden');
+
+  if (step === 2) {
+    loadDiagnosticsStep();
+  }
+}
+
+async function loadDiagnosticsStep() {
+  const listEl = document.getElementById('ob-diag-list');
+  listEl.innerHTML = '<div style="font-size:0.75rem; color:var(--text-muted);">Inspecting system components...</div>';
+  try {
+    const res = await fetch(`${API_BASE}/onboarding/diagnostics`);
+    if (res.ok) {
+      const data = await res.json();
+      const items = [
+        { label: 'AI Reasoning Engine', ready: data.llm_ready, desc: data.diagnostics.llm.details },
+        { label: 'Speech Recognition (faster-whisper)', ready: data.voice_stt_ready, desc: data.diagnostics.voice_stt.details },
+        { label: 'Speech Synthesis (pyttsx3)', ready: data.voice_tts_ready, desc: data.diagnostics.voice_tts.details },
+        { label: 'Browser Automation (Playwright)', ready: data.browser_ready, desc: data.diagnostics.browser.details },
+        { label: 'Screen OCR Reading (winocr)', ready: data.ocr_ready, desc: data.diagnostics.ocr.details },
+      ];
+      listEl.innerHTML = items.map(item => `
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 12px; background:rgba(255,255,255,0.04); border-radius:6px; border:1px solid rgba(0,180,255,0.08);">
+          <div>
+            <div style="font-size:0.78rem; font-weight:600; color:var(--text-prime);">${escHtml(item.label)}</div>
+            <div style="font-size:0.65rem; color:var(--text-dim);">${escHtml(item.desc)}</div>
+          </div>
+          <span style="font-family:var(--font-code); font-size:0.65rem; padding:2px 8px; border-radius:4px; ${item.ready ? 'background:rgba(0,255,136,0.15); color:var(--green); border:1px solid var(--green);' : 'background:rgba(255,215,0,0.15); color:var(--gold); border:1px solid var(--gold);'}">
+            ${item.ready ? 'READY' : 'SETUP'}
+          </span>
+        </div>
+      `).join('');
+    } else {
+      listEl.innerHTML = '<div style="font-size:0.75rem; color:var(--gold);">Diagnostics check returned error status.</div>';
+    }
+  } catch (err) {
+    listEl.innerHTML = `<div style="font-size:0.75rem; color:var(--red);">Diagnostics failed: ${err.message}</div>`;
+  }
+}
+
+async function finishOnboarding() {
+  const userName = document.getElementById('ob-username').value.trim();
+  const city = document.getElementById('ob-city').value.trim();
+  const apiKey = document.getElementById('ob-apikey').value.trim();
+
+  try {
+    await fetch(`${API_BASE}/onboarding/configure`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_name: userName || undefined,
+        preferred_city: city || undefined,
+        gemini_api_key: apiKey || undefined,
+      })
+    });
+    showToast('Setup saved successfully!', 'success');
+  } catch (e) {
+    showToast('Saved profile locally.', 'info');
+  }
+  closeOnboardingModal();
+  addMessage('jarvis', `Welcome aboard${userName ? ', ' + userName : ''}! Everyday Mode is active. You can organize folders, summarize documents, set reminders, or ask any question.`);
+}
 
 // ── System Status Indicators ────────────────────────────────
 function setSystemStatus(status, colorClass='green') {
@@ -1604,6 +1978,65 @@ function connectWebSocket() {
         if (data.metrics.llm_time_to_first_token) document.getElementById('lat-llm').textContent = data.metrics.llm_time_to_first_token.toFixed(0) + ' ms';
         if (data.metrics.tts_time_to_first_audio) document.getElementById('lat-tts').textContent = data.metrics.tts_time_to_first_audio.toFixed(0) + ' ms';
         if (data.metrics.total_request_latency) document.getElementById('lat-total').textContent = data.metrics.total_request_latency.toFixed(0) + ' ms';
+      }
+
+      // Live DAG Task Execution and Telemetry Feed (Mission Control)
+      if (data.type === 'execution_event' || data.event_type) {
+        const evType = data.event_type || data.type;
+        const telemetryEl = document.getElementById('operator-telemetry');
+        const treeEl = document.getElementById('operator-execution-tree');
+        const goalEl = document.getElementById('operator-active-goal');
+
+        if (data.goal && goalEl) {
+          goalEl.textContent = data.goal;
+        }
+
+        // Append timestamped telemetry
+        if (telemetryEl) {
+          const timeStr = new Date().toLocaleTimeString();
+          const logLine = document.createElement('div');
+          logLine.style.padding = '2px 0';
+          logLine.style.borderBottom = '1px solid rgba(0,180,255,0.05)';
+          logLine.innerHTML = `<span style="color:var(--cyan)">[${timeStr}]</span> <span style="color:var(--gold)">${escHtml(evType)}</span>: ${escHtml(data.message || data.node_id || JSON.stringify(data.payload || ''))}`;
+          telemetryEl.prepend(logLine);
+        }
+
+        // Render or update active task node in DAG
+        if (data.node_id && treeEl) {
+          let nodeCard = document.getElementById(`node-${data.node_id}`);
+          if (!nodeCard) {
+            if (treeEl.textContent.includes('No active execution')) treeEl.innerHTML = '';
+            nodeCard = document.createElement('div');
+            nodeCard.id = `node-${data.node_id}`;
+            nodeCard.className = 'task-card running';
+            treeEl.appendChild(nodeCard);
+          }
+          const nodeStatus = data.status || (evType.includes('completed') ? 'success' : (evType.includes('failed') ? 'failed' : 'running'));
+          nodeCard.className = `task-card ${nodeStatus}`;
+          nodeCard.innerHTML = `
+            <div class="task-card-header">
+              <span class="task-card-name">Node ${escHtml(data.node_id)}: ${escHtml(data.description || 'Executing...')}</span>
+              <span class="task-card-status ${nodeStatus}">${nodeStatus.toUpperCase()}</span>
+            </div>
+            <div class="task-card-result">${escHtml(data.result || data.message || 'Processing...')}</div>
+          `;
+        }
+      }
+
+      // Confirmation gate handling
+      if (data.type === 'WAITING_FOR_CONFIRMATION') {
+        showConfirmationModal(data);
+      }
+      if (data.type === 'CONFIRMATION_RESULT' || data.type === 'CONFIRMATION_PROCESSED') {
+        document.getElementById('confirmation-modal').classList.add('hidden');
+      }
+
+      // Proactive alerts and reminder triggers
+      if (data.type === 'reminder_triggered') {
+        showToast(`⏰ ${data.title}${data.message ? ': ' + data.message : ''}`, 'info');
+      }
+      if (data.type === 'proactive_alert' && data.alert) {
+        showToast(data.alert, 'info');
       }
     } catch(e){}
   };
