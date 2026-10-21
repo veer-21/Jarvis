@@ -131,12 +131,20 @@ Schema:
 }}
 """
         try:
-            res = self.brain.reasoning._fallback_generate(prompt)
+            if hasattr(self.brain.reasoning, "generate_text"):
+                res = self.brain.reasoning.generate_text(prompt)
+            else:
+                res = self.brain.reasoning._fallback_generate(prompt)
             # Try to extract JSON if surrounded by markdown
             import re
-            json_match = re.search(r'```json\s*(.*?)\s*```', res, re.DOTALL)
+            json_match = re.search(r'```(?:json)?\s*(.*?)\s*```', res, re.DOTALL)
             if json_match:
                 res = json_match.group(1)
+            else:
+                # Also try to extract first outer JSON object if extra text exists
+                brace_match = re.search(r'(\{[\s\S]*\})', res)
+                if brace_match:
+                    res = brace_match.group(1)
                 
             data = json.loads(res)
             return GoalPlan(**data)
@@ -258,11 +266,53 @@ Schema:
                     except Exception as e:
                         task.status = "failed"
                         task.result = str(e)
+
+                    # Dynamic Self-Healing & Adaptive Recovery
+                    if task.status == "failed":
+                        log.warning(f"[GoalExecutor] Task {task.id} failed ({task.result}). Attempting self-healing recovery...")
+                        try:
+                            recovery_prompt = (
+                                f"Goal: {self.active_plan.goal}\n"
+                                f"Failed Task: {task.description}\n"
+                                f"Tool: {task.tool_name}\n"
+                                f"Error Encountered: {task.result}\n"
+                                "Provide an alternative action or corrected parameters to achieve this step.\n"
+                                "Return JSON: {\"tool_name\": string, \"input_variables\": dict}"
+                            )
+                            reflection = self.brain.reasoning._fallback_generate(recovery_prompt)
+                            match = re.search(r"\{.*?\}", reflection, re.DOTALL)
+                            if match:
+                                fix_data = json.loads(match.group(0))
+                                alt_tool = fix_data.get("tool_name", task.tool_name)
+                                alt_vars = fix_data.get("input_variables", task.input_variables)
+                                log.info(f"[GoalExecutor] Retrying Task {task.id} with alternative tool '{alt_tool}'")
+                                
+                                retry_task = task.model_copy()
+                                retry_task.tool_name = alt_tool
+                                retry_task.input_variables = alt_vars
+                                retry_req = AgentMessage(
+                                    sender="goal_executor",
+                                    recipient="operator",
+                                    content=f"Recovery for {task.description}",
+                                    metadata={
+                                        "task": retry_task.model_dump(),
+                                        "execution_context": self.execution_context
+                                    }
+                                )
+                                retry_res = self.brain.agent_bus.send(retry_req)
+                                if retry_res.success:
+                                    task.status = "completed"
+                                    task.result = retry_res.content
+                                    if task.output_variables:
+                                        self.execution_context[task.id][task.output_variables[0]] = retry_res.content
+                                    log.info(f"[GoalExecutor] Self-healing succeeded for Task {task.id}!")
+                        except Exception as heal_err:
+                            log.warning(f"[GoalExecutor] Self-healing reflection failed: {heal_err}")
                     
                     self._broadcast_snapshot("AFTER", task)
                     
                     if task.status == "failed":
-                        log.error(f"[GoalExecutor] Task {task.id} failed: {task.result}")
+                        log.error(f"[GoalExecutor] Task {task.id} failed after recovery: {task.result}")
                         self._broadcast_execution_state("FAILED")
                         return f"Execution failed at task {task.id}: {task.result}"
                         
@@ -329,10 +379,221 @@ Schema:
 
     def _run_async(self, coro):
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(coro)
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = None
+
+            if loop and loop.is_running():
+                asyncio.run_coroutine_threadsafe(coro, loop)
             else:
-                asyncio.run(coro)
+                if loop and not loop.is_closed():
+                    loop.run_until_complete(coro)
+                else:
+                    asyncio.run(coro)
+        except Exception:
+            try:
+                new_loop = asyncio.new_event_loop()
+                new_loop.run_until_complete(coro)
+                new_loop.close()
+            except Exception:
+                pass
+
+    async def _broadcast_execution_state_async(self, state: str):
+        try:
+            from api.ws_manager import ws_manager
+            await ws_manager.broadcast({"type": "goal_execution_state", "data": {"state": state}})
         except Exception:
             pass
+
+    async def process_goal_stream(self, goal_text: str):
+        from core.brain.streaming_manager import StreamingManager
+        from core.brain.execution_manager import ExecutionEvent
+
+        log.info(f"[GoalExecutor] Processing Goal Stream: {goal_text}")
+        
+        loop = asyncio.get_running_loop()
+        
+        event = ExecutionEvent(
+            event_type="STARTING_STEP",
+            step_index=0,
+            data={"status": "Generating execution plan..."}
+        )
+        yield StreamingManager.format_execution_event(event)
+
+        # Generate DAG
+        self.active_plan = await loop.run_in_executor(None, self.generate_dag, goal_text)
+        
+        if not self.active_plan or not self.active_plan.tasks:
+            event = ExecutionEvent(
+                event_type="STEP_FAILED",
+                step_index=0,
+                data={"error": "Failed to generate a valid plan."}
+            )
+            yield StreamingManager.format_execution_event(event)
+            return
+
+        try:
+            self.validate_dag(self.active_plan)
+        except ValueError as e:
+            error_log.error(f"DAG Validation Failed: {e}")
+            event = ExecutionEvent(
+                event_type="STEP_FAILED",
+                step_index=0,
+                data={"error": f"Plan Validation Error: {e}"}
+            )
+            yield StreamingManager.format_execution_event(event)
+            return
+        
+        if self.active_plan.overall_risk in [RiskLevel.MEDIUM, RiskLevel.HIGH, RiskLevel.CRITICAL]:
+            event = ExecutionEvent(
+                event_type="STEP_SUSPENDED",
+                step_index=0,
+                data={"risk": self.active_plan.overall_risk.value, "message": "Awaiting approval in Mission Control."}
+            )
+            yield StreamingManager.format_execution_event(event)
+            await loop.run_in_executor(None, self._broadcast_plan_preview)
+            return
+
+        async for event_dict in self.execute_stream():
+            yield event_dict
+
+    async def execute_stream(self):
+        from core.brain.streaming_manager import StreamingManager
+        from core.brain.execution_manager import ExecutionEvent
+        
+        if not self.active_plan:
+            return
+            
+        log.info("[GoalExecutor] Starting Execution Loop Stream.")
+        await self._broadcast_execution_state_async("RUNNING")
+        self.execution_context = {}
+        
+        completed = set()
+        step_idx = 1
+        
+        while len(completed) < len(self.active_plan.tasks):
+            progress_made = False
+            for task in self.active_plan.tasks:
+                if task.id in completed:
+                    continue
+                    
+                if all(dep in completed for dep in task.dependencies):
+                    # Ready to execute! Yield STARTING_STEP event
+                    event = ExecutionEvent(
+                        event_type="STARTING_STEP",
+                        step_index=step_idx,
+                        data={
+                            "task_id": task.id,
+                            "description": task.description,
+                            "capability": task.capability.value
+                        }
+                    )
+                    formatted_event = StreamingManager.format_execution_event(event)
+                    from api.ws_manager import ws_manager
+                    await ws_manager.broadcast(formatted_event)
+                    yield formatted_event
+                    
+                    if task.node_type == NodeType.ACTION:
+                        # Yield EXECUTING_TOOL event
+                        event = ExecutionEvent(
+                            event_type="EXECUTING_TOOL",
+                            step_index=step_idx,
+                            data={
+                                "tool_name": task.tool_name,
+                                "input_variables": task.input_variables
+                            }
+                        )
+                        formatted_event = StreamingManager.format_execution_event(event)
+                        await ws_manager.broadcast(formatted_event)
+                        yield formatted_event
+                        
+                    try:
+                        # Dispatch to Operator Agent via AgentBus
+                        req = AgentMessage(
+                            sender="goal_executor", 
+                            recipient="operator", 
+                            content=task.description, 
+                            metadata={
+                                "task": task.model_dump(),
+                                "execution_context": self.execution_context
+                            }
+                        )
+                        
+                        loop = asyncio.get_running_loop()
+                        res = await loop.run_in_executor(None, self.brain.agent_bus.send, req)
+                        
+                        task.status = "completed" if res.success else "failed"
+                        task.result = res.content
+                        
+                        if res.success:
+                            if task.id not in self.execution_context:
+                                self.execution_context[task.id] = {}
+                            if task.output_variables:
+                                out_var = task.output_variables[0]
+                                self.execution_context[task.id][out_var] = res.content
+                                
+                            # Verification
+                            verified = await loop.run_in_executor(None, self.verify, task)
+                            task.verification_status = "Passed" if verified else "Failed"
+                            if not verified:
+                                task.status = "failed"
+                                
+                    except Exception as e:
+                        task.status = "failed"
+                        task.result = str(e)
+                        
+                    # Yield TOOL_OUTPUT event
+                    event = ExecutionEvent(
+                        event_type="TOOL_OUTPUT",
+                        step_index=step_idx,
+                        data={
+                            "task_id": task.id,
+                            "status": task.status,
+                            "result": task.result,
+                            "verification_status": task.verification_status
+                        }
+                    )
+                    formatted_event = StreamingManager.format_execution_event(event)
+                    await ws_manager.broadcast(formatted_event)
+                    yield formatted_event
+                    
+                    if task.status == "failed":
+                        log.error(f"[GoalExecutor] Task {task.id} failed: {task.result}")
+                        await self._broadcast_execution_state_async("FAILED")
+                        return
+                        
+                    completed.add(task.id)
+                    progress_made = True
+                    step_idx += 1
+                    
+            if not progress_made:
+                break
+                
+        await self._broadcast_execution_state_async("COMPLETED")
+        
+        # Generate completion report and stream the tokens!
+        final_prompt = f"Goal: {self.active_plan.goal}\nContext: {json.dumps(self.execution_context)}\nWrite a final summary report."
+        try:
+            loop = asyncio.get_running_loop()
+            
+            def run_final_stream():
+                return self.brain.reasoning.stream_message(final_prompt, "You are JARVIS. Summarize the task execution results.", raw_message=final_prompt)
+                
+            gen = await loop.run_in_executor(None, run_final_stream)
+            def get_next_token():
+                try:
+                    return next(gen)
+                except StopIteration:
+                    return None
+
+            while True:
+                chunk = await loop.run_in_executor(None, get_next_token)
+                if chunk is None:
+                    break
+                yield {"type": "stream_chunk", "chunk": chunk}
+        except Exception:
+            yield {"type": "stream_chunk", "chunk": "Goal execution finished successfully."}

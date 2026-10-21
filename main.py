@@ -12,10 +12,18 @@ Usage:
 
 import os
 import sys
+import subprocess
+from pathlib import Path
+
+# Auto-switch to workspace virtual environment if launched with system Python
+_workspace_dir = Path(__file__).parent.resolve()
+_venv_python = _workspace_dir / "venv" / "Scripts" / "python.exe"
+if _venv_python.exists() and sys.executable.lower() != str(_venv_python).lower():
+    sys.exit(subprocess.call([str(_venv_python)] + sys.argv))
+
 import argparse
 import signal
 from datetime import datetime
-from pathlib import Path
 
 # ─── Environment ──────────────────────────────────────────────────────────────
 from dotenv import load_dotenv
@@ -28,6 +36,7 @@ from core.brain    import JarvisBrain
 from core.memory   import JarvisMemory
 from core.voice    import VoiceInterface
 from core.security import owner_auth, guard
+from core.daemon   import ProactiveDaemon
 
 
 # ─── Banner ───────────────────────────────────────────────────────────────────
@@ -48,7 +57,12 @@ _SHUTDOWN = False
 def _signal_handler(sig, frame):
     global _SHUTDOWN
     _SHUTDOWN = True
-    print("\n\n[JARVIS] Emergency shutdown signal received. Closing systems gracefully...")
+    print("\n\n[JARVIS] Emergency Dead-Man's Switch activated! Halting all digital hands and closing systems gracefully...")
+    try:
+        from tools.automation_tools import trigger_emergency_stop
+        trigger_emergency_stop()
+    except Exception:
+        pass
 
 signal.signal(signal.SIGINT,  _signal_handler)
 signal.signal(signal.SIGTERM, _signal_handler)
@@ -187,8 +201,8 @@ def run_text_mode(brain: JarvisBrain, voice: VoiceInterface) -> None:
             continue
         elif cmd == "brain update":
             print("\n[JARVIS] Running Project Brain auto-update cycle...")
-            from core.agents.base_agent import AgentMessage
-            msg = AgentMessage(sender="cli", recipient="memory", content="", metadata={"action": "update_project_brain"})
+            from core.agents.base_agent import create_system_message
+            msg = create_system_message(sender="cli", recipient="memory", content="", metadata={"action": "update_project_brain"})
             res = brain._memory_agent.process(msg)
             print(f"\n[JARVIS] Update result: {res.content}")
             continue
@@ -232,6 +246,83 @@ def run_voice_mode(brain: JarvisBrain, voice: VoiceInterface) -> None:
         print(f"\nYOU (Voice): {user_input}")
         response = brain.process_input(user_input)
         voice.speak(response)
+
+
+def run_unified_mode(brain: JarvisBrain, memory: JarvisMemory, voice: VoiceInterface) -> None:
+    """
+    Unified All-in-One Mode:
+    - Starts the Web Dashboard & API server in background and opens the browser.
+    - Runs the Voice Listener (Microphone) in background with Wake Word & PTT support.
+    - Runs the Terminal CLI in foreground so you can also type commands anytime.
+    """
+    import threading
+    import webbrowser
+    import time
+
+    print("\n" + "=" * 60)
+    print("  🚀 JARVIS UNIFIED OPERATING SYSTEM ACTIVE")
+    print("  - Web Dashboard:  http://localhost:7799 (Opening in browser...)")
+    print("  - Voice Engine:   Microphone active (Speak or press F9)")
+    print("  - Terminal CLI:   Type commands below anytime")
+    print("=" * 60 + "\n")
+
+    # 1. Start Web Dashboard API in background
+    def start_api():
+        try:
+            from api.server import app, set_server_brain
+            set_server_brain(brain, memory)
+            import uvicorn
+            uvicorn.run(app, host="0.0.0.0", port=7799, log_level="warning")
+        except Exception as e:
+            log.warning(f"Could not start Web Dashboard API: {e}")
+
+    api_thread = threading.Thread(target=start_api, daemon=True)
+    api_thread.start()
+
+    # 2. Auto-launch browser to Dashboard
+    def open_browser():
+        time.sleep(2.0)
+        try:
+            webbrowser.open("http://localhost:7799/")
+        except Exception:
+            pass
+    threading.Thread(target=open_browser, daemon=True).start()
+
+    # 3. Voice listener background worker
+    def voice_loop():
+        time.sleep(1.0)
+        try:
+            voice.speak("JARVIS unified operating system online. I am listening, sir.")
+        except Exception:
+            pass
+        while not _SHUTDOWN:
+            try:
+                spoken = voice.listen(wait_for_wake_word=True)
+                if spoken and not _SHUTDOWN:
+                    print(f"\n[🎙️ VOICE] YOU: {spoken}")
+                    spoken_lower = spoken.lower().strip()
+                    if any(kw in spoken_lower for kw in ("shut down", "shutdown", "goodbye", "exit")):
+                        voice.speak("Shutting down systems. Goodbye, sir.")
+                        break
+                    elif spoken_lower.startswith("execute task"):
+                        task_desc = spoken[12:].strip()
+                        voice.speak(f"Understood. Executing task: {task_desc}")
+                        res = brain.execute_task(task_desc)
+                        voice.speak("Task execution complete.")
+                        print(res)
+                    else:
+                        resp = brain.process_input(spoken)
+                        print(f"\nJARVIS: {resp}\nYOU  ▶  ", end="", flush=True)
+                        voice.speak(resp)
+            except Exception as e:
+                log.debug(f"Voice loop error: {e}")
+                time.sleep(1.0)
+
+    voice_thread = threading.Thread(target=voice_loop, daemon=True)
+    voice_thread.start()
+
+    # 4. Foreground Terminal CLI
+    run_text_mode(brain, voice)
 
 
 def run_single_task(brain: JarvisBrain, task: str) -> None:
@@ -321,8 +412,8 @@ def main() -> None:
     # Project Brain Update
     if args.brain_update:
         print("\n[JARVIS] Running Project Brain auto-update cycle...")
-        from core.agents.base_agent import AgentMessage
-        msg = AgentMessage(sender="cli", recipient="memory", content="", metadata={"action": "update_project_brain"})
+        from core.agents.base_agent import create_system_message
+        msg = create_system_message(sender="cli", recipient="memory", content="", metadata={"action": "update_project_brain"})
         res = brain._memory_agent.process(msg)
         print(f"\n[JARVIS] Update result: {res.content}")
         return
@@ -337,12 +428,30 @@ def main() -> None:
         run_single_task(brain, args.task)
         return
 
+    # Initialize background proactive daemon
+    def proactive_notifier(msg: str):
+        print(f"\n[JARVIS Proactive Alert] 🔔 {msg}\n")
+        try:
+            voice.speak(msg)
+        except Exception:
+            pass
+
+    daemon = ProactiveDaemon(notify_fn=proactive_notifier)
+    from core.daemon_instance import set_daemon
+    set_daemon(daemon)
+    daemon.start()
+
     # Interactive modes
-    if args.voice:
-        run_voice_mode(brain, voice)
-    else:
-        # Default: text mode
-        run_text_mode(brain, voice)
+    try:
+        if args.text:
+            run_text_mode(brain, voice)
+        elif args.voice:
+            run_voice_mode(brain, voice)
+        else:
+            # Default: Unified Mode (Dashboard + Voice + Terminal)
+            run_unified_mode(brain, memory, voice)
+    finally:
+        daemon.stop()
 
     print("\n[JARVIS] Systems offline. Goodbye.")
     log.info("JARVIS shutdown complete.")

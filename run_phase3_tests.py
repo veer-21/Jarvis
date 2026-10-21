@@ -3,7 +3,7 @@ import os
 import asyncio
 from datetime import datetime
 
-sys.path.insert(0, r"d:\Home\H.W. OR Self\Jarvis")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.brain.brain import Brain
 from core.brain.execution_manager import ExecutionManager

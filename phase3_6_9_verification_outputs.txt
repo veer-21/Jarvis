@@ -1,0 +1,181 @@
+================================================================================
+JARVIS PHASE 3.6.9 VERIFICATION OUTPUTS
+Environment: Windows (PowerShell) / CPython 3.10.21
+Workspace: D:\Jarvis
+Verification Timestamp: 2026-10-19T11:02:00Z
+================================================================================
+
+--------------------------------------------------------------------------------
+COMMAND 1: Syntax & Bytecode Compilation
+$ venv\Scripts\python.exe -m compileall -q core api tools main.py tests
+--------------------------------------------------------------------------------
+Exit Code: 0
+Stdout: (empty)
+Stderr: (empty)
+Result: SUCCESS - All core, api, tools, main.py, and test modules compiled cleanly.
+
+--------------------------------------------------------------------------------
+COMMAND 2: Test Collection Audit
+$ venv\Scripts\python.exe -m pytest --collect-only -q
+--------------------------------------------------------------------------------
+Exit Code: 0
+Output:
+tests/test_assistant_orchestrator.py::TestAcceptanceCriteria::test_acceptance_find_readme_and_summarize
+tests/test_assistant_orchestrator.py::TestAcceptanceCriteria::test_acceptance_open_notepad_and_verify
+tests/test_assistant_orchestrator.py::TestAcceptanceCriteria::test_acceptance_remember_preference
+tests/test_assistant_orchestrator.py::TestAcceptanceCriteria::test_acceptance_stop_current_task
+tests/test_assistant_orchestrator.py::TestAcceptanceCriteria::test_acceptance_web_search_and_summarize
+tests/test_human_language_30.py::test_01_open_app_and_verify
+tests/test_human_language_30.py::test_02_find_readme_and_explain
+tests/test_human_language_30.py::test_03_list_root_directory
+tests/test_human_language_30.py::test_04_search_react_docs
+tests/test_human_language_30.py::test_05_open_browser_and_read
+tests/test_human_language_30.py::test_06_find_todos_in_code
+tests/test_human_language_30.py::test_07_remember_preference
+tests/test_human_language_30.py::test_08_query_preference
+tests/test_human_language_30.py::test_09_forget_preference
+tests/test_human_language_30.py::test_10_search_python_docs
+tests/test_human_language_30.py::test_11_stop_task
+tests/test_human_language_30.py::test_12_cancel_doing
+tests/test_human_language_30.py::test_13_abort_operation
+tests/test_human_language_30.py::test_14_never_mind
+tests/test_human_language_30.py::test_15_check_system_status
+tests/test_human_language_30.py::test_16_what_time_is_it
+tests/test_human_language_30.py::test_17_what_is_todays_date
+tests/test_human_language_30.py::test_18_list_files_current_dir
+tests/test_human_language_30.py::test_19_create_notes_file
+tests/test_human_language_30.py::test_20_read_notes_file
+tests/test_human_language_30.py::test_21_delete_notes_file
+tests/test_human_language_30.py::test_22_check_notepad_active
+tests/test_human_language_30.py::test_23_weather_search
+tests/test_human_language_30.py::test_24_find_first_python_file
+tests/test_human_language_30.py::test_25_read_that_file_referential
+tests/test_human_language_30.py::test_26_summarize_file
+tests/test_human_language_30.py::test_27_write_poem
+tests/test_human_language_30.py::test_28_explain_dag_dependencies
+tests/test_human_language_30.py::test_29_list_running_windows
+tests/test_human_language_30.py::test_30_who_are_you
+tests/test_phase3_6_1_e2e_api.py::test_api_chat_store_policy
+tests/test_phase3_6_1_e2e_api.py::test_api_chat_stream
+tests/test_phase3_6_1_e2e_api.py::test_api_execute_task
+tests/test_phase3_6_1_e2e_api.py::test_websocket_authenticated_chat_flow
+tests/test_phase3_6_1_e2e_api.py::test_websocket_interrupt_active_task
+tests/test_phase3_6_1_e2e_api.py::test_websocket_confirmation_approval_flow
+tests/test_phase3_6_1_e2e_api.py::test_attacker_cannot_approve_victim_confirmation
+tests/test_phase3_6_1_e2e_api.py::test_api_chat_stream_store_policy
+tests/test_phase3_6_1_e2e_api.py::test_rest_confirmation_authorization_and_privacy
+tests/test_phase3_6_1_e2e_api.py::test_rest_task_interrupt_ownership
+tests/test_phase3_6_1_e2e_api.py::test_websocket_two_session_private_event_isolation
+tests/test_phase3_6_1_e2e_api.py::test_api_task_status_truth_and_task_id
+tests/test_phase3_6_1_e2e_api.py::test_api_task_status_truth_mappings_endpoint
+tests/test_phase3_6_1_e2e_api.py::test_two_session_orchestrator_dag_cancellation_isolation
+tests/test_phase3_6_1_e2e_api.py::test_api_task_endpoint_returned_id_interruptable
+tests/test_phase3_6_1_e2e_api.py::test_api_task_history_ownership_enforcement
+tests/test_phase3_6_1_e2e_api.py::test_stream_interruption_and_failure_states
+tests/test_phase3_6_1_e2e_api.py::test_tool_router_no_broadcast_fallback_with_two_sessions
+tests/test_phase3_6_1_e2e_api.py::test_two_session_chat_history_isolation
+tests/test_phase3_6_1_e2e_api.py::test_websocket_unauthenticated_interrupt_and_voice_protection
+tests/test_phase3_6_1_e2e_api.py::test_session_scoped_chat_reset_rest_and_streaming
+tests/test_phase3_6_1_e2e_api.py::test_two_session_short_term_reasoning_and_prefetch_isolation
+tests/test_phase3_6_1_e2e_api.py::test_rest_task_interrupt_fail_closed_on_missing_metadata
+tests/test_phase3_6_1_e2e_api.py::test_p0_2_per_user_semantic_and_episodic_memory_ownership
+tests/test_phase3_6_1_e2e_api.py::test_phase3_6_8_internal_memory_ownership_and_deletion_safety
+tests/test_phase3_6_1_e2e_api.py::test_phase3_6_9_trusted_identity_and_fail_closed_memory_completion
+tests/test_phase3_6_hardening.py::test_confirmation_lifecycle_create_approve_and_cleanup
+tests/test_phase3_6_hardening.py::test_confirmation_denial
+tests/test_phase3_6_hardening.py::test_confirmation_session_authorization
+tests/test_phase3_6_hardening.py::test_confirmation_expiry
+tests/test_phase3_6_hardening.py::test_task_real_interruption_and_dag_halting
+tests/test_phase3_6_hardening.py::test_task_cancellation_idempotence
+tests/test_phase3_6_hardening.py::test_tool_safe_timeout_and_explicit_timed_out_state
+tests/test_phase3_6_hardening.py::test_tool_cooperative_cancellation
+tests/test_phase3_6_hardening.py::test_worker_pool_recycling_prevents_worker_corruption
+tests/test_phase3_6_hardening.py::test_memory_store_true_persists_interaction
+tests/test_phase3_6_hardening.py::test_memory_store_false_leaves_conversational_memory_unchanged
+tests/test_phase3_6_hardening.py::test_quarantine_rejects_syntax_error
+tests/test_phase3_6_hardening.py::test_quarantine_rejects_dangerous_patterns
+tests/test_phase3_6_hardening.py::test_quarantine_registers_valid_tool
+tests/test_phase3_6_hardening.py::test_background_worker_safe_broadcast_delivery
+tests/test_phase3_6_hardening.py::test_no_cross_session_cancel
+tests/test_phase3_6_hardening.py::test_session_affine_tool_blocks_concurrent_overlap
+tests/test_phase3_6_hardening.py::test_tool_success_semantics_error_vs_verified
+tests/test_phase3_6_hardening.py::test_custom_tool_security_ast_rejects_forbidden_patterns
+tests/test_phase3_6_hardening.py::test_execution_context_lifecycle_isolation
+tests/test_phase3_6_hardening.py::test_task_status_truth_mappings
+tests/test_phase3_6_hardening.py::test_multiple_active_tasks_independence
+tests/test_phase3_6_hardening.py::test_orchestrator_task_registry_lifecycle_and_cross_session_isolation
+tests/test_phase3_6_hardening.py::test_p1_6_active_task_setter_explicit_context_no_task_never_falls_back
+tests/test_phase3_6_hardening.py::test_p1_6_identity_safe_task_unregister_concurrent_same_session
+tests/test_phase3_6_hardening.py::test_p1_6_identity_safe_task_unregister_different_sessions
+tests/test_phase3_6_hardening.py::test_p1_6_lifecycle_cleanup_completion_failure_cancellation
+tests/test_phase3_6_hardening.py::test_custom_tool_security_ast_rejects_reflection_format_map_chr_map_exact
+tests/test_phase3_6_hardening.py::test_custom_tool_security_ast_rejects_reflection_format_map_constant_dunder
+tests/test_phase3_6_hardening.py::test_custom_tool_security_ast_rejects_reflection_format_map_variable_dunder
+tests/test_phase3_6_hardening.py::test_custom_tool_security_ast_rejects_reflection_format_map_dynamic_unvalidated
+tests/test_phase3_6_hardening.py::test_custom_tool_security_ast_allows_safe_format_map_pure_computation
+tests/test_phase3_6_hardening.py::test_quarantine_rejects_format_map_reflection_never_registered
+tests/test_phase3_6_hardening.py::test_custom_tool_security_ast_rejects_exact_vformat_probe
+tests/test_phase3_6_hardening.py::test_custom_tool_security_ast_rejects_exact_get_field_probe
+tests/test_phase3_6_hardening.py::test_custom_tool_security_ast_rejects_formatter_dynamic_field_names
+tests/test_phase3_6_hardening.py::test_custom_tool_security_ast_rejects_constant_dunder_format_fields
+tests/test_phase3_6_hardening.py::test_custom_tool_security_ast_rejects_variable_constructed_format_strings
+tests/test_phase3_6_hardening.py::test_custom_tool_security_ast_rejects_dynamic_imports_and_direct_dunder_access
+tests/test_phase3_6_hardening.py::test_custom_tool_security_ast_allows_safe_literal_formatting
+tests/test_phase3_6_hardening.py::test_quarantine_rejects_formatter_vformat_never_registered
+tests/integration/test_real_tools.py::test_read_file_tool
+tests/integration/test_real_tools.py::test_write_file_tool
+tests/integration/test_real_tools.py::test_safe_delete_file_tool
+tests/integration/test_real_tools.py::test_list_directory_tool
+tests/integration/test_real_tools.py::test_get_file_info_tool
+tests/integration/test_real_tools.py::test_search_in_files_tool
+tests/integration/test_real_tools.py::test_execute_command_safe
+tests/integration/test_real_tools.py::test_execute_command_blocked
+tests/integration/test_real_tools.py::test_system_info_tool
+tests/integration/test_real_tools.py::test_weather_tool_mocked
+tests/integration/test_real_tools.py::test_schedule_task_tool
+tests/integration/test_real_tools.py::test_browser_open_and_read_mocked
+
+127 tests collected in 16.47s
+Result: SUCCESS - 127 total tests collected across the entire repository.
+
+--------------------------------------------------------------------------------
+COMMAND 3: Full Repository Test Execution
+$ venv\Scripts\python.exe -m pytest -q
+--------------------------------------------------------------------------------
+Exit Code: 0
+Output:
+........................................................................ [ 56%]
+.......................................................                  [100%]
+127 passed in 41.92s
+Result: SUCCESS - 127 passed, 0 failed, 0 errors.
+
+--------------------------------------------------------------------------------
+COMMAND 4: Hardening Test Suite Execution
+$ venv\Scripts\python.exe -m pytest -q tests/test_phase3_6_hardening.py
+--------------------------------------------------------------------------------
+Exit Code: 0
+Output:
+.........................................                                [100%]
+41 passed in 5.29s
+Result: SUCCESS - 41 passed, 0 failed.
+
+--------------------------------------------------------------------------------
+COMMAND 5: End-to-End API Test Suite Execution
+$ venv\Scripts\python.exe -m pytest -q tests/test_phase3_6_1_e2e_api.py
+--------------------------------------------------------------------------------
+Exit Code: 0
+Output:
+..........................                                               [100%]
+26 passed in 22.09s
+Result: SUCCESS - 26 passed, 0 failed (including test_phase3_6_8 and test_phase3_6_9).
+
+--------------------------------------------------------------------------------
+COMMAND 6: Real Tools Integration Test Suite Execution
+$ venv\Scripts\python.exe -m pytest -q tests/integration/test_real_tools.py
+--------------------------------------------------------------------------------
+Exit Code: 0
+Output:
+............                                                             [100%]
+12 passed in 14.20s
+Result: SUCCESS - 12 passed, 0 failed.
+================================================================================
