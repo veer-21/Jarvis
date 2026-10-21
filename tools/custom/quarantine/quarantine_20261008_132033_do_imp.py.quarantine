@@ -1,0 +1,3 @@
+def do_imp(mod: str):
+    '''imp'''
+    return __import__(mod)

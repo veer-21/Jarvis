@@ -23,13 +23,22 @@ from core.security import guard
 # JARVIS will never access or modify these paths without explicit override.
 RESTRICTED_PATHS: list[str] = [
     os.environ.get("WINDIR", "C:/Windows").lower(),
+    "c:/windows",
     "c:/program files",
     "c:/program files (x86)",
     "c:/users/default",
+    "c:/recovery",
+    "c:/boot",
+    "c:/system volume information",
+    "c:/pagefile.sys",
+    "c:/swapfile.sys",
 ]
 
 def _is_restricted(path: str) -> bool:
     abs_path = Path(path).resolve().as_posix().lower()
+    # Protect root drive itself (e.g. 'c:/' or 'c:')
+    if abs_path.rstrip('/') in ["c:", "d:", "e:"]:
+        return True
     return any(abs_path.startswith(r) for r in RESTRICTED_PATHS)
 
 
@@ -263,3 +272,57 @@ def search_in_files(directory: str, query: str, extension: str = ".txt") -> str:
 
     except Exception as e:
         return f"Error during file search: {str(e)}"
+
+
+# ─── Knowledge Graph / Graphify Integration ───────────────────────────────────
+
+def graphify_query(question: str) -> str:
+    """
+    Search and query the codebase using the pre-computed Graphify knowledge graph.
+    Returns targeted code nodes, relationships, and file locations with minimal token usage.
+
+    Args:
+        question: Concept, function, or question about the codebase (e.g. 'ReasoningEngine', 'VoiceInterface', 'ExecutionPlan').
+    """
+    graph_path = Path(__file__).parent.parent / "graphify-out" / "graph.json"
+    if not graph_path.exists():
+        return "Graphify knowledge graph not found. Run python build_graphify.py first."
+
+    try:
+        data = json.loads(graph_path.read_text(encoding="utf-8"))
+        nodes = data.get("nodes", [])
+        edges = data.get("edges", [])
+        
+        q_lower = question.lower().strip()
+        matched_nodes = []
+        for n in nodes:
+            nid = str(n.get("id", ""))
+            label = str(n.get("label", ""))
+            doc = str(n.get("docstring", "") or "")
+            src = str(n.get("source_location", "") or "")
+            if q_lower in nid.lower() or q_lower in label.lower() or q_lower in src.lower():
+                matched_nodes.append(n)
+                if len(matched_nodes) >= 10:
+                    break
+
+        if not matched_nodes:
+            return f"No direct graph nodes matched '{question}'. Try a specific symbol or use search_in_files."
+
+        lines = [f"Knowledge Graph Results for '{question}':\n"]
+        matched_ids = {n.get("id") for n in matched_nodes}
+        for n in matched_nodes:
+            loc = n.get("source_location", "Unknown location")
+            ntype = n.get("type", "node")
+            lines.append(f"• [{ntype}] {n.get('id')} -> {loc}")
+
+        # Related connections
+        rel_edges = [e for e in edges if e.get("source") in matched_ids or e.get("target") in matched_ids][:15]
+        if rel_edges:
+            lines.append("\nKey Relationships:")
+            for e in rel_edges:
+                lines.append(f"  {e.get('source')} --({e.get('relation', 'calls')})--> {e.get('target')}")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error querying knowledge graph: {str(e)}"
+

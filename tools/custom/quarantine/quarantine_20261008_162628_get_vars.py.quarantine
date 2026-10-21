@@ -1,0 +1,3 @@
+def get_vars(obj):
+    '''vars'''
+    return vars(obj)

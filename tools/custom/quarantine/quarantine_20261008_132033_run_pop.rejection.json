@@ -1,0 +1,6 @@
+{
+  "function_name": "run_pop",
+  "rejected_at": "2026-10-08T13:20:33.614143+00:00",
+  "reason": "Security violation: forbidden operation 'popen' detected.",
+  "file": "quarantine_20261008_132033_run_pop.py.quarantine"
+}

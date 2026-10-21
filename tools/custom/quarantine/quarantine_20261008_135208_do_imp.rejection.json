@@ -1,0 +1,6 @@
+{
+  "function_name": "do_imp",
+  "rejected_at": "2026-10-08T13:52:08.212476+00:00",
+  "reason": "Security violation: forbidden call '__import__' detected.",
+  "file": "quarantine_20261008_135208_do_imp.py.quarantine"
+}

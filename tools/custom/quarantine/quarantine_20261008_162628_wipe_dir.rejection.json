@@ -1,0 +1,6 @@
+{
+  "function_name": "wipe_dir",
+  "rejected_at": "2026-10-08T16:26:28.421402+00:00",
+  "reason": "Security violation: module 'shutil' is not in the allowed import list (['collections', 'datetime', 'itertools', 'json', 'math', 'random', 're', 'string', 'typing']).",
+  "file": "quarantine_20261008_162628_wipe_dir.py.quarantine"
+}

@@ -1,0 +1,6 @@
+{
+  "function_name": "bad_syntax_tool",
+  "rejected_at": "2026-10-07T18:10:12.113499+00:00",
+  "reason": "Syntax error: unterminated string literal (detected at line 3) at line 3:11",
+  "file": "quarantine_20261007_181012_bad_syntax_tool.py"
+}

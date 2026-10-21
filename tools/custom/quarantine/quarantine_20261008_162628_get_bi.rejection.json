@@ -1,0 +1,6 @@
+{
+  "function_name": "get_bi",
+  "rejected_at": "2026-10-08T16:26:28.452039+00:00",
+  "reason": "Security violation: forbidden reference to '__builtins__' detected.",
+  "file": "quarantine_20261008_162628_get_bi.py.quarantine"
+}

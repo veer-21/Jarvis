@@ -1,0 +1,6 @@
+{
+  "function_name": "p_read",
+  "rejected_at": "2026-10-08T16:26:07.528000+00:00",
+  "reason": "Security violation: module 'pathlib' is not in the allowed import list (['collections', 'datetime', 'itertools', 'json', 'math', 'random', 're', 'string', 'typing']).",
+  "file": "quarantine_20261008_162607_p_read.py.quarantine"
+}

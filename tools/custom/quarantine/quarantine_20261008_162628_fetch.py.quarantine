@@ -1,0 +1,4 @@
+import urllib.request
+def fetch():
+    '''fetch'''
+    return urllib.request.urlopen('http://x')

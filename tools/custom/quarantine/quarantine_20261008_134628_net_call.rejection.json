@@ -1,0 +1,6 @@
+{
+  "function_name": "net_call",
+  "rejected_at": "2026-10-08T13:46:28.427423+00:00",
+  "reason": "Security violation: forbidden module import 'socket' detected.",
+  "file": "quarantine_20261008_134628_net_call.py.quarantine"
+}

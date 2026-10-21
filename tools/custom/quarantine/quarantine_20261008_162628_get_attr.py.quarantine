@@ -1,0 +1,3 @@
+def get_attr(obj):
+    '''attr'''
+    return getattr(obj, 'secret')

@@ -1,0 +1,6 @@
+{
+  "function_name": "hack_sys",
+  "rejected_at": "2026-10-08T16:26:28.463033+00:00",
+  "reason": "Security violation: forbidden call 'getattr()' detected.",
+  "file": "quarantine_20261008_162628_hack_sys.py.quarantine"
+}

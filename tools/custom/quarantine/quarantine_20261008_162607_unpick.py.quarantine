@@ -1,0 +1,4 @@
+import pickle
+def unpick(b):
+    '''pickle'''
+    return pickle.loads(b)

@@ -1,0 +1,6 @@
+{
+  "function_name": "get_glob",
+  "rejected_at": "2026-10-08T16:26:28.434500+00:00",
+  "reason": "Security violation: forbidden call 'globals()' detected.",
+  "file": "quarantine_20261008_162628_get_glob.py.quarantine"
+}

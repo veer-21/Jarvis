@@ -1,0 +1,6 @@
+{
+  "function_name": "do_exec",
+  "rejected_at": "2026-10-08T13:57:57.804614+00:00",
+  "reason": "Security violation: forbidden call 'exec' detected.",
+  "file": "quarantine_20261008_135757_do_exec.py.quarantine"
+}

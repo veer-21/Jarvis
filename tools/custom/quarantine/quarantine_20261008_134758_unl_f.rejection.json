@@ -1,0 +1,6 @@
+{
+  "function_name": "unl_f",
+  "rejected_at": "2026-10-08T13:47:58.764881+00:00",
+  "reason": "Security violation: forbidden operation 'unlink' detected.",
+  "file": "quarantine_20261008_134758_unl_f.py.quarantine"
+}

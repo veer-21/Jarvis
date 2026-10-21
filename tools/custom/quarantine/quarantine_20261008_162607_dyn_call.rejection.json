@@ -1,0 +1,6 @@
+{
+  "function_name": "dyn_call",
+  "rejected_at": "2026-10-08T16:26:07.570035+00:00",
+  "reason": "Security violation: module 'importlib' is not in the allowed import list (['collections', 'datetime', 'itertools', 'json', 'math', 'random', 're', 'string', 'typing']).",
+  "file": "quarantine_20261008_162607_dyn_call.py.quarantine"
+}

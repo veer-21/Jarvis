@@ -1,0 +1,4 @@
+import os
+def get_dir():
+    '''dir'''
+    return os.listdir('.')

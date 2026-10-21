@@ -1,0 +1,6 @@
+{
+  "function_name": "run_cmd",
+  "rejected_at": "2026-10-08T16:26:28.367091+00:00",
+  "reason": "Security violation: module 'subprocess' is not in the allowed import list (['collections', 'datetime', 'itertools', 'json', 'math', 'random', 're', 'string', 'typing']).",
+  "file": "quarantine_20261008_162628_run_cmd.py.quarantine"
+}

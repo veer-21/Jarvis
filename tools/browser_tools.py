@@ -48,7 +48,10 @@ def _ensure_browser(headless: bool = True) -> tuple:
     if _browser is None or not _browser.is_connected():
         log.info("Starting Playwright browser...")
         _playwright_instance = sync_playwright().start()
-        _browser  = _playwright_instance.chromium.launch(headless=headless)
+        try:
+            _browser = _playwright_instance.chromium.launch(channel="chromium", headless=headless)
+        except Exception:
+            _browser = _playwright_instance.chromium.launch(headless=headless)
         _context  = _browser.new_context(
             viewport={"width": 1280, "height": 800},
             user_agent=(

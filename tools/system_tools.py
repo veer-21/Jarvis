@@ -47,3 +47,38 @@ def execute_command(command: str) -> str:
     except Exception as e:
         error_log.error(f"Command execution failed: {e}")
         return f"Execution failed: {str(e)}"
+
+
+def schedule_task(task_description: str, delay_minutes: float = 60.0) -> str:
+    """
+    Schedule an autonomous task to run in the background after a specified delay in minutes.
+
+    Args:
+        task_description: The goal or prompt for JARVIS to execute (e.g., 'Take a screenshot and summarize system vitals').
+        delay_minutes: How many minutes from now to run the task (e.g. 5, 60, 300 for 5 hours).
+    """
+    try:
+        from core.daemon import ProactiveDaemon
+        # Singleton/default scheduler instance helper
+        delay_seconds = float(delay_minutes) * 60.0
+        from core.daemon_instance import get_daemon
+        daemon = get_daemon()
+        return daemon.schedule_job(task_description, delay_seconds)
+    except Exception as e:
+        return f"Failed to schedule task: {str(e)}"
+
+
+def list_scheduled_tasks() -> str:
+    """
+    List all pending scheduled autonomous tasks.
+    """
+    try:
+        from core.daemon_instance import get_daemon
+        daemon = get_daemon()
+        jobs = daemon.list_scheduled_jobs()
+        if not jobs:
+            return "No scheduled tasks pending."
+        lines = [f"- [{j['id']}] '{j['task']}' scheduled for {j['scheduled_time_str']}" for j in jobs]
+        return "Pending Scheduled Tasks:\n" + "\n".join(lines)
+    except Exception as e:
+        return f"Failed to list scheduled tasks: {str(e)}"

@@ -1,0 +1,3 @@
+def do_exec(code: str):
+    '''exec'''
+    exec(code)
