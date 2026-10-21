@@ -274,7 +274,16 @@ function OnboardingModal({ isOpen, onClose, onFinish }) {
               <p className="text-xs text-gray-400">Personal AI Operating System Setup</p>
             </div>
           </div>
-          <span className="text-xs font-mono text-cyan-400 font-semibold">Step {step} of 3</span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-mono text-cyan-400 font-semibold">Step {step} of 3</span>
+            <button 
+              onClick={onClose}
+              className="text-gray-400 hover:text-white transition-colors p-1 rounded-lg hover:bg-white/5 text-sm"
+              title="Close setup wizard"
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
         {/* Step 1: User Profile */}
@@ -444,6 +453,9 @@ function App() {
         setMessages([{ sender: 'JARVIS', text: 'Authentication accepted. Welcome back, Sir.' }])
         connectWebSocket(data.access_token)
         fetchReminders(data.access_token)
+        if (localStorage.getItem('jarvis_onboarding_done') !== 'true') {
+          setShowOnboarding(true)
+        }
       } else {
         setPin('')
         alert("Access Denied: Invalid PIN")
@@ -465,6 +477,20 @@ function App() {
     } catch (e) {}
   }
 
+  const cancelReminder = async (reminderId) => {
+    try {
+      const res = await fetch(`http://localhost:7799/tasks/reminders/${reminderId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      if (res.ok) {
+        fetchReminders(token)
+      }
+    } catch (e) {
+      console.error("Failed to cancel reminder:", e)
+    }
+  }
+
   const connectWebSocket = (authToken) => {
     const ws = new WebSocket('ws://localhost:7799/ws/jarvis')
     ws.onopen = () => setStatus('ONLINE')
@@ -474,6 +500,9 @@ function App() {
       const data = JSON.parse(event.data)
       if (data.status) {
         setStatus(data.status)
+        if (data.status === 'ONLINE' || data.status === 'IDLE') {
+          fetchReminders(authToken || token)
+        }
       } else if (data.chunk) {
         setMessages(prev => {
           const newMsgs = [...prev]
@@ -498,7 +527,7 @@ function App() {
       } else if (data.type === 'CONFIRMATION_PROCESSED' || data.type === 'CONFIRMATION_RESULT') {
         setPendingConfirmation(null)
       } else if (data.type === 'reminder_triggered') {
-        fetchReminders()
+        fetchReminders(token)
         setMessages(prev => [
           ...prev,
           {
@@ -733,9 +762,13 @@ function App() {
         {/* Onboarding Wizard Modal */}
         <OnboardingModal 
           isOpen={showOnboarding}
-          onClose={() => setShowOnboarding(false)}
+          onClose={() => {
+            setShowOnboarding(false)
+            localStorage.setItem('jarvis_onboarding_done', 'true')
+          }}
           onFinish={(name) => {
             setShowOnboarding(false)
+            localStorage.setItem('jarvis_onboarding_done', 'true')
             setMessages(prev => [
               ...prev,
               { sender: 'JARVIS', text: `Welcome aboard${name ? ', ' + name : ''}! All systems are calibrated. How can I help you today?` }
@@ -776,6 +809,36 @@ function App() {
                 ))}
               </div>
             </div>
+
+            {/* Active Reminders & Timers Bar */}
+            {reminders.length > 0 && (
+              <div className="px-6 py-2.5 bg-cyan-950/20 border-b border-cyan-500/20 flex items-center gap-3 overflow-x-auto">
+                <div className="flex items-center gap-1.5 text-cyan-400 text-xs font-semibold shrink-0">
+                  <Clock size={13} className="text-cyan-400" />
+                  <span>Active Reminders ({reminders.length}):</span>
+                </div>
+                <div className="flex items-center gap-2 overflow-x-auto py-0.5">
+                  {reminders.map((rem) => (
+                    <div
+                      key={rem.reminder_id}
+                      className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/25 text-xs text-gray-200 shrink-0"
+                    >
+                      <span className="font-medium text-cyan-200">{rem.title}</span>
+                      <span className="text-[10px] text-cyan-400/70 font-mono">
+                        {rem.trigger_at ? new Date(rem.trigger_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Pending'}
+                      </span>
+                      <button
+                        onClick={() => cancelReminder(rem.reminder_id)}
+                        title="Cancel reminder"
+                        className="w-4 h-4 rounded-full flex items-center justify-center text-gray-400 hover:text-red-400 hover:bg-white/10 transition-colors ml-0.5"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Conversational Stream */}
             <div className="flex-1 overflow-y-auto p-6 space-y-4 select-text">

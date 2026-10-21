@@ -681,6 +681,29 @@ JSON:"""
                 )
             ]
 
+        # Multi-step: Webpage reading and summarization (Phase 5.0)
+        url_match = re.search(r"https?://[^\s\"'<>]+", user_request)
+        if url_match and any(w in req_lower for w in ("summarize", "read", "explain", "article", "page", "webpage", "site", "what is on", "what's on", "fetch", "extract", "check")):
+            target_url = url_match.group(0).rstrip(".,)>\"'")
+            return [
+                TaskStep(
+                    step_id="step_1",
+                    description=f"Read and extract text from webpage '{target_url}'",
+                    capability="everyday",
+                    tool_name="read_and_summarize_webpage",
+                    input_variables={"url": target_url},
+                    output_variables=["webpage_content"],
+                    dependencies=[]
+                ),
+                TaskStep(
+                    step_id="step_2",
+                    description=f"Summarize and synthesize key insights from '{target_url}'",
+                    capability="reasoning",
+                    input_variables={"content": "{{step_1.webpage_content}}"},
+                    dependencies=["step_1"]
+                )
+            ]
+
         # Multi-step: Web search -> Summarize
         if ("search the web" in req_lower or "search for" in req_lower or "web search" in req_lower) and any(w in req_lower for w in ("summarize", "compare", "latest", "release", "tell me", "documentation", "docs", "react")):
             topic = re.sub(r"^(search the web for|search for|open the browser and search for|find)\s*", "", req_lower)
@@ -849,7 +872,110 @@ JSON:"""
                 )
             ]
 
-        # ── Everyday Consumer Tools Heuristics (Phase 4.1) ──
+        # ── Everyday Consumer Tools Heuristics (Phases 4.1 & 5.0) ──
+
+        # Personal To-dos & Notes (Phase 5.0)
+        if any(p in req_lower for p in ("add to my to-do", "add to my todo", "add to my to dos", "add to todo", "add to to-do", "add a todo", "add a to-do", "new todo", "new to-do", "create a todo", "create a to-do", "create todo", "create to-do")) or \
+           (req_lower.startswith("add ") and any(w in req_lower for w in ("todo", "to-do", "task to my list", "item to my list"))):
+            title = re.sub(r"^(?:add\s+)?(?:a\s+)?(?:new\s+)?(?:to-?do(?:\s+item)?|task)\s*(?::\s*)?", "", user_request, flags=re.IGNORECASE).strip()
+            title = re.sub(r"\s+to\s+my\s+(?:to-?do\s+)?list.*$", "", title, flags=re.IGNORECASE).strip()
+            if not title:
+                title = "New Task"
+            return [
+                TaskStep(
+                    step_id="step_1",
+                    description=f"Add personal to-do '{title}'",
+                    capability="everyday",
+                    tool_name="manage_personal_notes_and_todos",
+                    input_variables={"action": "add", "title": title, "category": "personal"},
+                    dependencies=[]
+                )
+            ]
+
+        if any(p in req_lower for p in ("complete todo", "complete to-do", "finish todo", "finish to-do", "mark todo", "mark to-do")) or \
+           (any(w in req_lower for w in ("mark", "complete", "finish")) and any(w in req_lower for w in ("done", "completed"))):
+            target = re.sub(r"^(?:mark\s+(?:the\s+)?(?:to-?do\s+|task\s+)?|complete\s+(?:the\s+)?(?:to-?do\s+|task\s+)?|finish\s+(?:the\s+)?(?:to-?do\s+|task\s+)?)", "", user_request, flags=re.IGNORECASE).strip()
+            target = re.sub(r"\s+as\s+(?:done|completed).*$", "", target, flags=re.IGNORECASE).strip()
+            target = re.sub(r"\s+done.*$", "", target, flags=re.IGNORECASE).strip()
+            return [
+                TaskStep(
+                    step_id="step_1",
+                    description=f"Complete personal to-do '{target}'",
+                    capability="everyday",
+                    tool_name="manage_personal_notes_and_todos",
+                    input_variables={"action": "complete", "item_id": target},
+                    dependencies=[]
+                )
+            ]
+
+        if any(p in req_lower for p in ("delete todo", "delete to-do", "remove todo", "remove to-do", "delete from my to-do", "delete from my todo", "remove from my to-do", "remove from my todo", "delete from to-do", "delete from todo")) or \
+           (("from my to-do" in req_lower or "from my todo" in req_lower or "from to-do" in req_lower or "from todo" in req_lower) and any(w in req_lower for w in ("delete", "remove"))):
+            target = re.sub(r"^(?:delete|remove)\s+(?:the\s+)?(?:to-?do\s+|task\s+)?", "", user_request, flags=re.IGNORECASE).strip()
+            target = re.sub(r"\s+from\s+my\s+(?:to-?do\s+)?list.*$", "", target, flags=re.IGNORECASE).strip()
+            target = re.sub(r"\s+from\s+(?:to-?do\s+)?list.*$", "", target, flags=re.IGNORECASE).strip()
+            return [
+                TaskStep(
+                    step_id="step_1",
+                    description=f"Delete personal to-do '{target}'",
+                    capability="everyday",
+                    tool_name="manage_personal_notes_and_todos",
+                    input_variables={"action": "delete", "item_id": target},
+                    dependencies=[]
+                )
+            ]
+
+        if any(p in req_lower for p in ("show my todo", "show my to-do", "list my todo", "list my to-do", "what are my todo", "what are my to-do", "my todos", "my to-dos", "my todo list", "my to-do list", "check my todo", "check my to-do", "view my todo", "view my to-do")):
+            return [
+                TaskStep(
+                    step_id="step_1",
+                    description="List personal to-do items and notes",
+                    capability="everyday",
+                    tool_name="manage_personal_notes_and_todos",
+                    input_variables={"action": "list", "category": "all"},
+                    dependencies=[]
+                )
+            ]
+
+        # Smart Clipboard Assistant (Phase 5.0)
+        if any(p in req_lower for p in ("what's on my clipboard", "what is on my clipboard", "read clipboard", "show clipboard", "check clipboard", "get clipboard", "view clipboard", "paste clipboard", "what did i copy", "read my clipboard")):
+            return [
+                TaskStep(
+                    step_id="step_1",
+                    description="Read current system clipboard contents",
+                    capability="everyday",
+                    tool_name="smart_clipboard_assistant",
+                    input_variables={"action": "read"},
+                    dependencies=[]
+                )
+            ]
+
+        if any(p in req_lower for p in ("clipboard history", "show clipboard history", "view clipboard history", "list clipboard history", "recent clipboard")):
+            return [
+                TaskStep(
+                    step_id="step_1",
+                    description="View clipboard history buffer",
+                    capability="everyday",
+                    tool_name="smart_clipboard_assistant",
+                    input_variables={"action": "history"},
+                    dependencies=[]
+                )
+            ]
+
+        if (("to clipboard" in req_lower or "to my clipboard" in req_lower or "on clipboard" in req_lower or "on my clipboard" in req_lower) and any(w in req_lower for w in ("copy", "put", "set", "write", "save"))) or \
+           any(p in req_lower for p in ("copy to clipboard", "put on my clipboard", "put on clipboard", "set clipboard to", "write to clipboard")):
+            content = re.sub(r"^(?:copy\s+(?:this\s+)?(?:.*?to\s+(?:my\s+)?clipboard\s*:?\s*)?|put\s+(?:this\s+)?(?:.*?on\s+(?:my\s+)?clipboard\s*:?\s*)?|set\s+clipboard\s+to\s*:?\s*|write\s+to\s+clipboard\s*:?\s*)", "", user_request, flags=re.IGNORECASE).strip()
+            if not content:
+                content = user_request
+            return [
+                TaskStep(
+                    step_id="step_1",
+                    description="Write content to system clipboard",
+                    capability="everyday",
+                    tool_name="smart_clipboard_assistant",
+                    input_variables={"action": "write", "content": content},
+                    dependencies=[]
+                )
+            ]
 
         # Folder smart organization & undo
         if any(w in req_lower for w in ("clean up", "organize", "declutter")) and any(w in req_lower for w in ("downloads", "desktop", "folder", "documents")):

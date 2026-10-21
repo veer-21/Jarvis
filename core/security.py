@@ -485,6 +485,20 @@ class SecurityGuard:
         elif t_low == "create_reminder_or_timer":
             if effective_risk not in (RiskLevel.MODERATE_RISK, RiskLevel.HIGH_RISK, RiskLevel.CRITICAL):
                 effective_risk = RiskLevel.LOW_RISK
+        elif t_low == "manage_personal_notes_and_todos":
+            action = str(args.get("action", "")).lower()
+            if action in ("add", "complete", "delete"):
+                effective_risk = RiskLevel.LOW_RISK
+            else:
+                effective_risk = RiskLevel.READ_ONLY
+        elif t_low == "smart_clipboard_assistant":
+            action = str(args.get("action", "")).lower()
+            if action == "write":
+                effective_risk = RiskLevel.LOW_RISK
+            else:
+                effective_risk = RiskLevel.READ_ONLY
+        elif t_low == "read_and_summarize_webpage":
+            effective_risk = RiskLevel.READ_ONLY
 
         requires_confirmation = effective_risk in (RiskLevel.HIGH_RISK, RiskLevel.CRITICAL)
 
