@@ -153,6 +153,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 _voice_mgr.start()
             except Exception as voice_err:
                 error_log.error(f"Resilient Voice Manager startup fallback: {voice_err}")
+
+        # Restore pending reminders on startup (Phase 7.0)
+        try:
+            from tools.everyday_tools import restore_pending_reminders_on_startup
+            res = restore_pending_reminders_on_startup()
+            log.info(f"Restored pending reminders on startup: {res}")
+        except Exception as rem_err:
+            error_log.error(f"Resilient reminder restoration fallback: {rem_err}")
             
     except Exception as e:
         error_log.error(f"API startup warning: {e}. Proceeding with degraded capability.")
@@ -824,9 +832,10 @@ async def cancel_reminder_by_id(reminder_id: str, auth: AuthRequired):
 
 
 class TodoCreateRequest(BaseModel):
-    title: str
+    title: Optional[str] = None
+    content: Optional[str] = None
     notes: Optional[str] = ""
-    category: Optional[str] = "personal"
+    category: Optional[str] = "todo"
     due_date: Optional[str] = None
 
 
@@ -842,11 +851,15 @@ async def get_personal_todos(auth: AuthRequired, category: Optional[str] = None)
 async def create_personal_todo(body: TodoCreateRequest, auth: AuthRequired):
     """Create a personal to-do item."""
     from tools.everyday_tools import manage_personal_notes_and_todos
+    item_title = (body.title or body.content or "").strip()
+    if not item_title:
+        raise HTTPException(status_code=400, detail="title or content is required to create a to-do")
     result = manage_personal_notes_and_todos(
         action="add",
-        title=body.title,
+        title=item_title,
+        content=body.content or item_title,
         notes=body.notes or "",
-        category=body.category or "personal",
+        category=body.category or "todo",
         due_date=body.due_date
     )
     return result

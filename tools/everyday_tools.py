@@ -11,6 +11,7 @@ Consumer-friendly tools for everyday Windows users:
 """
 
 import os
+import re
 import sys
 import time
 import json
@@ -71,6 +72,13 @@ class SmartClipboardAssistantArgs(BaseModel):
 class ReadAndSummarizeWebpageArgs(BaseModel):
     url: str = Field(..., description="Webpage or article URL to read and summarize")
     focus_question: Optional[str] = Field(default=None, description="Optional question or focus topic for the extraction")
+
+class ComposeAndLaunchMessageArgs(BaseModel):
+    recipient: str = Field(default="", description="Recipient email address or name")
+    subject: str = Field(default="", description="Subject line of the email or message")
+    body: str = Field(default="", description="Draft body text of the message")
+    channel: str = Field(default="clipboard", description="Channel: 'clipboard', 'gmail', 'mailto', or 'email'")
+    open_client: bool = Field(default=False, description="Whether to launch web or OS mail client")
 
 
 # ─── Global State & Persistence Paths ─────────────────────────────────────────
@@ -467,6 +475,65 @@ def list_and_manage_reminders(action: str = "list", reminder_id: Optional[str] =
 
         else:
             return {"success": False, "error": f"Unknown action '{action}'. Valid actions are 'list', 'cancel', 'clear'."}
+
+
+def restore_pending_reminders_on_startup() -> Dict[str, int]:
+    """
+    Scans reminders.json on system boot/startup and recovers pending reminders:
+    - Overdue or immediate (remaining <= 1s): triggered in a background thread after a 2-second grace delay.
+    - Future timers (remaining > 1s): re-scheduled as daemon threading.Timer and registered in _active_timer_threads.
+    Returns:
+        dict: {"restored_count": count, "triggered_overdue_count": overdue_count}
+    """
+    restored_count = 0
+    triggered_overdue_count = 0
+    delayed_threads = []
+
+    with _reminders_lock:
+        reminders = _load_reminders()
+        now = time.time()
+        for r in reminders:
+            if r.get("status") != "pending":
+                continue
+
+            reminder_id = r.get("reminder_id")
+            if not reminder_id:
+                continue
+
+            title = r.get("title", "Reminder")
+            message = r.get("message") or title
+            try:
+                trigger_epoch = float(r.get("trigger_epoch", 0))
+            except (ValueError, TypeError):
+                trigger_epoch = 0.0
+
+            remaining = trigger_epoch - now
+
+            if remaining <= 1:
+                # Trigger immediately in background thread after 2-second grace delay
+                def _delayed_overdue_trigger(rid=reminder_id, t=title, m=message):
+                    time.sleep(2.0)
+                    _trigger_reminder_action(rid, t, m)
+
+                th = threading.Thread(target=_delayed_overdue_trigger, daemon=True)
+                delayed_threads.append(th)
+                triggered_overdue_count += 1
+            else:
+                if reminder_id not in _active_timer_threads:
+                    timer = threading.Timer(remaining, _trigger_reminder_action, args=[reminder_id, title, message])
+                    timer.daemon = True
+                    timer.start()
+                    _active_timer_threads[reminder_id] = timer
+                    restored_count += 1
+
+    for th in delayed_threads:
+        th.start()
+
+    log.info(f"Reminder restoration on boot: restored {restored_count} future timers, queued {triggered_overdue_count} overdue triggers.")
+    return {
+        "restored_count": restored_count,
+        "triggered_overdue_count": triggered_overdue_count
+    }
 
 
 # ─── Tool 5: control_windows_setting ──────────────────────────────────────────
@@ -1092,3 +1159,155 @@ def read_and_summarize_webpage(
             "url": clean_url,
             "error": f"Failed to fetch or parse webpage: {e}"
         }
+
+
+# ─── Tool 11: compose_and_launch_message ──────────────────────────────────────
+
+def compose_and_launch_message(
+    recipient: str = "",
+    subject: str = "",
+    body: str = "",
+    channel: str = "clipboard",
+    open_client: bool = False
+) -> Dict[str, Any]:
+    """
+    Everyday Email & Message Composer Tool (Phase 7.0).
+    Formats a clean email or message draft, copies the formatted body to the system clipboard,
+    and optionally opens Gmail or the default mailto client with pre-populated fields.
+    """
+    import urllib.parse
+    import webbrowser
+
+    clean_recipient = (recipient or "").strip()
+    clean_subject = (subject or "").strip()
+    clean_body = (body or "").strip()
+    chan = (channel or "clipboard").strip().lower()
+
+    # Smart Email Draft Synthesis (Phase 8.0)
+    RAW_COMMAND_PREFIXES = (
+        "draft an email", "write an email", "compose an email",
+        "compose a message", "draft a message", "write a message",
+        "help me draft", "draft email", "write email"
+    )
+    clean_lower = clean_body.lower()
+    is_command = any(clean_lower.startswith(p) for p in RAW_COMMAND_PREFIXES)
+
+    if not clean_body or is_command:
+        # 1. Read user_name from user_preferences.json if available
+        signer_name = "JARVIS User"
+        prefs_file = Path(r"D:\Jarvis\data\user_preferences.json")
+        if prefs_file.exists():
+            try:
+                with open(prefs_file, "r", encoding="utf-8") as f:
+                    prefs_data = json.load(f)
+                    if prefs_data.get("user_name"):
+                        uname = prefs_data["user_name"].strip()
+                        if uname:
+                            signer_name = uname
+            except Exception:
+                pass
+
+        # 2. Derive recipient display name
+        if clean_recipient:
+            prefix = clean_recipient.split("@")[0].strip()
+            recipient_display = prefix.capitalize() if prefix else "there"
+        else:
+            recipient_display = "there"
+
+        # 3. Extract topic from clean_subject or clean_body
+        topic = ""
+        if clean_subject and not any(clean_subject.lower().startswith(p) for p in RAW_COMMAND_PREFIXES):
+            sub = clean_subject
+            for pre in ("regarding ", "about ", "subject: "):
+                if sub.lower().startswith(pre):
+                    sub = sub[len(pre):].strip()
+            topic = sub.strip()
+
+        if not topic and clean_body:
+            m = re.search(r"(?:about|regarding)\s+([^,.\n]+)", clean_body, flags=re.IGNORECASE)
+            if m:
+                topic = m.group(1).strip()
+
+        if not topic:
+            topic = "our upcoming discussion"
+
+        formatted_body = (
+            f"Hi {recipient_display},\n\n"
+            f"I hope you are doing well. I am writing to follow up regarding {topic}.\n\n"
+            f"Please let me know your thoughts or when might be a convenient time to connect.\n\n"
+            f"Best regards,\n"
+            f"{signer_name}"
+        )
+        if not clean_subject:
+            clean_subject = f"Regarding {topic}"
+    else:
+        # Keep explicit non-command body verbatim
+        formatted_body = clean_body
+
+    # Always copy formatted body to the system clipboard
+    copied = False
+    try:
+        import pyperclip
+        pyperclip.copy(formatted_body)
+        copied = True
+    except Exception:
+        try:
+            proc = subprocess.Popen(["clip"], stdin=subprocess.PIPE, text=True)
+            proc.communicate(input=formatted_body)
+            copied = True
+        except Exception:
+            copied = False
+
+    # Also register in clipboard history if available
+    if formatted_body:
+        with _clipboard_lock:
+            masked = mask_sensitive_data(formatted_body)
+            _CLIPBOARD_HISTORY.append({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "text": masked,
+                "raw": formatted_body,
+                "length": len(formatted_body)
+            })
+            if len(_CLIPBOARD_HISTORY) > 10:
+                _CLIPBOARD_HISTORY.pop(0)
+
+    url_opened = ""
+    client_launched = False
+
+    if open_client:
+        to_enc = urllib.parse.quote(clean_recipient)
+        su_enc = urllib.parse.quote(clean_subject)
+        body_enc = urllib.parse.quote(formatted_body)
+
+        if chan == "gmail":
+            url_opened = f"https://mail.google.com/mail/?view=cm&fs=1&to={to_enc}&su={su_enc}&body={body_enc}"
+            try:
+                webbrowser.open(url_opened)
+                client_launched = True
+            except Exception as e:
+                log.warning(f"Could not open Gmail compose URL: {e}")
+        elif chan in ("mailto", "email"):
+            url_opened = f"mailto:{clean_recipient}?subject={su_enc}&body={body_enc}"
+            try:
+                webbrowser.open(url_opened)
+                client_launched = True
+            except Exception as e:
+                log.warning(f"Could not open mailto URL: {e}")
+
+    status_msg = f"Message drafted and copied to clipboard ({len(formatted_body)} chars)."
+    if client_launched:
+        status_msg += f" Opened {chan} client."
+
+    return {
+        "success": True,
+        "recipient": clean_recipient,
+        "subject": clean_subject,
+        "body": formatted_body,
+        "channel": chan,
+        "open_client": open_client,
+        "client_launched": client_launched,
+        "url": url_opened,
+        "copied_to_clipboard": copied,
+        "character_count": len(formatted_body),
+        "message": status_msg
+    }

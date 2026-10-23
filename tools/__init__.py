@@ -84,6 +84,7 @@ def get_tool_registry() -> dict:
         registry["manage_personal_notes_and_todos"] = everyday_tools.manage_personal_notes_and_todos
         registry["smart_clipboard_assistant"]        = everyday_tools.smart_clipboard_assistant
         registry["read_and_summarize_webpage"]       = everyday_tools.read_and_summarize_webpage
+        registry["compose_and_launch_message"]       = everyday_tools.compose_and_launch_message
     except ImportError as e:
         log.warning(f"everyday_tools unavailable: {e}")
 
@@ -118,6 +119,6 @@ def get_tool_categories() -> dict[str, list[str]]:
                         "list_and_manage_reminders", "control_windows_setting", "summarize_local_document",
                         "generate_daily_briefing", "get_active_window_context",
                         "manage_personal_notes_and_todos", "smart_clipboard_assistant",
-                        "read_and_summarize_webpage"],
+                        "read_and_summarize_webpage", "compose_and_launch_message"],
     }
 

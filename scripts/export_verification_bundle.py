@@ -16,17 +16,24 @@ from pathlib import Path
 
 WORKSPACE_ROOT = Path(r"D:\Jarvis")
 OUTPUT_ZIP_PATH = WORKSPACE_ROOT / "jarvis_phase_verification.zip"
+OUTPUT_PHASE6_ZIP_PATH = WORKSPACE_ROOT / "jarvis_phase6_verification.zip"
+OUTPUT_PHASE7_ZIP_PATH = WORKSPACE_ROOT / "jarvis_phase7_verification.zip"
+OUTPUT_PHASE8_ZIP_PATH = WORKSPACE_ROOT / "jarvis_phase8_verification.zip"
+OUTPUT_ZIP_PATHS = [OUTPUT_ZIP_PATH, OUTPUT_PHASE6_ZIP_PATH, OUTPUT_PHASE7_ZIP_PATH, OUTPUT_PHASE8_ZIP_PATH]
 
 ALLOWED_PREFIXES = (
     "core/",
     "api/",
     "tools/",
     "desktop/src/",
+    "desktop/dist/",
     "desktop/electron/",
     "ui/",
     "tests/",
     "scripts/",
     "Start_Jarvis",
+    "USER_GUIDE.md",
+    "README.md",
     "jarvis_antigravity_master_blueprint.md",
 )
 
@@ -170,19 +177,20 @@ def main():
         "files_included": file_records,
     }
 
-    # 4. Create ZIP bundle
-    print(f"Creating ZIP bundle at {OUTPUT_ZIP_PATH} with {len(modified_files)} files...")
-    with zipfile.ZipFile(OUTPUT_ZIP_PATH, "w", compression=zipfile.ZIP_DEFLATED) as z:
-        # Write manifest
-        manifest_bytes = json.dumps(manifest, indent=2).encode("utf-8")
-        z.writestr("verification_manifest.json", manifest_bytes)
+    # 4. Create ZIP bundles
+    for out_path in OUTPUT_ZIP_PATHS:
+        print(f"Creating ZIP bundle at {out_path} with {len(modified_files)} files...")
+        with zipfile.ZipFile(out_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
+            # Write manifest
+            manifest_bytes = json.dumps(manifest, indent=2).encode("utf-8")
+            z.writestr("verification_manifest.json", manifest_bytes)
 
-        # Write files
-        for rel_path in modified_files:
-            full_path = WORKSPACE_ROOT / rel_path
-            z.write(full_path, arcname=rel_path)
+            # Write files
+            for rel_path in modified_files:
+                full_path = WORKSPACE_ROOT / rel_path
+                z.write(full_path, arcname=rel_path)
 
-    print(f"Successfully generated {OUTPUT_ZIP_PATH} ({OUTPUT_ZIP_PATH.stat().st_size} bytes)")
+        print(f"Successfully generated {out_path} ({out_path.stat().st_size} bytes)")
     print("=== Verification Bundler Completed ===")
 
 

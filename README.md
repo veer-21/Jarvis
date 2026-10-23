@@ -1,4 +1,4 @@
-# JARVIS — Personal AI Operating System v2.0
+# JARVIS — Personal AI Operating System (v4.0–v8.0 Consumer Edition)
 
 ```
      ██╗ █████╗ ██████╗ ██╗   ██╗██╗███████╗
@@ -7,10 +7,12 @@
 ██   ██║██╔══██║██╔══██╗╚██╗ ██╔╝██║╚════██║
 ╚█████╔╝██║  ██║██║  ██║ ╚████╔╝ ██║███████║
  ╚════╝ ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝╚══════╝
-  Just A Rather Very Intelligent System  v2.0
+  Just A Rather Very Intelligent System — Consumer Edition
 ```
 
-> A production-grade, modular, secure, voice-enabled personal AI operating system powered by Google Gemini.
+> **JARVIS v4.0–v8.0 Consumer Edition**: 210 Automated Tests (100% Passing) • Everyday Mode Glassmorphic UI • 40+ Verified Tools • 9-Stage Cognitive Orchestrator • Persistent Reminder Recovery on Boot • 1-Click Desktop Shortcut • Smart Email Composer
+
+📖 **For everyday usage instructions, see [USER_GUIDE.md](file:///D:/Jarvis/USER_GUIDE.md).**
 
 ---
 

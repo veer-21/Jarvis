@@ -69,10 +69,11 @@ class ResultVerifier:
         "generate_daily_briefing":   VerificationLevel.LEVEL_2,
         # Active Screen & Window Context Tools (Phase 4.3)
         "get_active_window_context": VerificationLevel.LEVEL_2,
-        # Personal Productivity Suite (Phase 5.0)
+        # Personal Productivity Suite (Phase 5.0 & 7.0)
         "manage_personal_notes_and_todos": VerificationLevel.LEVEL_2,
         "smart_clipboard_assistant":       VerificationLevel.LEVEL_2,
         "read_and_summarize_webpage":      VerificationLevel.LEVEL_2,
+        "compose_and_launch_message":      VerificationLevel.LEVEL_2,
     }
 
     @classmethod
@@ -291,6 +292,22 @@ class ResultVerifier:
                     details=f"Extracted {char_cnt} characters from {raw_result.get('url')}."
                 )
             err = raw_result.get("error", "Webpage extraction failed.") if isinstance(raw_result, dict) else str(raw_result)
+            return VerificationResult(verified=False, level=VerificationLevel.LEVEL_1, error=err, details=err)
+
+        # ── 9. Message & Email Drafting Verification (Phase 7.0) ──
+        if t_name == "compose_and_launch_message":
+            if isinstance(raw_result, dict) and raw_result.get("success"):
+                return VerificationResult(
+                    verified=True,
+                    level=VerificationLevel.LEVEL_2,
+                    evidence={
+                        "recipient": raw_result.get("recipient"),
+                        "channel": raw_result.get("channel"),
+                        "copied_to_clipboard": raw_result.get("copied_to_clipboard")
+                    },
+                    details=raw_result.get("message", "Message composed and processed successfully.")
+                )
+            err = raw_result.get("error", "Message composition failed.") if isinstance(raw_result, dict) else str(raw_result)
             return VerificationResult(verified=False, level=VerificationLevel.LEVEL_1, error=err, details=err)
 
         # Default fallback verification (Level 1: tool returned without error)
