@@ -1144,6 +1144,47 @@ JSON:"""
                 )
             ]
 
+        # Email & Message Drafting (Phase 7.0)
+        if any(p in req_lower for p in (
+            "draft an email", "write an email", "compose an email",
+            "compose a message", "draft a message", "write a message",
+            "draft email", "write email", "compose message", "compose email"
+        )):
+            recipient = ""
+            m_to = re.search(r"\bto\s+([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*|[a-z0-9_-]+)", user_request)
+            if m_to:
+                cand = m_to.group(1).strip()
+                if cand.lower() not in ("saying", "asking", "about", "regarding", "the", "my", "a", "an", "draft", "write", "compose"):
+                    recipient = cand
+
+            subject = ""
+            m_sub = re.search(r"(?:about|regarding|with subject|subject)\s+([^,.\n]+)", user_request, flags=re.IGNORECASE)
+            if m_sub:
+                subject = m_sub.group(1).strip()
+            elif not recipient:
+                subject = user_request
+
+            body = user_request
+            open_client = any(w in req_lower for w in ("open", "launch", "send", "gmail", "mail client"))
+            chan = "gmail" if "gmail" in req_lower else ("mailto" if "mailto" in req_lower or open_client else "clipboard")
+
+            return [
+                TaskStep(
+                    step_id="step_1",
+                    description=f"Draft message to '{recipient or 'recipient'}' with subject '{subject or 'General'}'",
+                    capability="everyday",
+                    tool_name="compose_and_launch_message",
+                    input_variables={
+                        "recipient": recipient,
+                        "subject": subject,
+                        "body": body,
+                        "channel": chan,
+                        "open_client": open_client
+                    },
+                    dependencies=[]
+                )
+            ]
+
         # Conversational fallback
         return [
             TaskStep(

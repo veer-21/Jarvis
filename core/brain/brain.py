@@ -50,7 +50,8 @@ from tools.everyday_tools  import (
     smart_organize_folder, undo_folder_organization, create_reminder_or_timer,
     list_and_manage_reminders, control_windows_setting, summarize_local_document,
     generate_daily_briefing,
-    manage_personal_notes_and_todos, smart_clipboard_assistant, read_and_summarize_webpage
+    manage_personal_notes_and_todos, smart_clipboard_assistant, read_and_summarize_webpage,
+    compose_and_launch_message
 )
 from tools.context_tools import get_active_window_context
 
@@ -192,6 +193,8 @@ class Brain:
                                      risk_level=RiskLevel.READ_ONLY, requires_confirmation=False)
         self.tools.register_callable(read_and_summarize_webpage, category="everyday",
                                      risk_level=RiskLevel.READ_ONLY, requires_confirmation=False)
+        self.tools.register_callable(compose_and_launch_message, category="everyday",
+                                     risk_level=RiskLevel.LOW_RISK, requires_confirmation=False)
 
         # Load Auto-Generated Custom Tools
         self.tools.load_custom_tools()

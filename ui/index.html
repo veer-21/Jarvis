@@ -724,8 +724,77 @@
     body.mode-pro #active-reminders-bar {
       display: none !important;
     }
+    body.mode-pro #todos-reminders-bar {
+      display: none !important;
+    }
 
-    /* Active Reminders Bar */
+    /* Active Reminders & To-Dos Bar (Everyday Mode) */
+    .todos-reminders-bar {
+      padding: 10px 24px;
+      border-bottom: 1px solid rgba(0, 180, 255, 0.12);
+      background: rgba(0, 180, 255, 0.04);
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .todos-reminders-bar.hidden {
+      display: none !important;
+    }
+    .todos-bar-header {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+    }
+    .todos-bar-left {
+      display: flex; align-items: center; gap: 10px; flex: 1; min-width: 260px;
+    }
+    .todos-bar-label {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 0.72rem; font-weight: 600; color: var(--cyan);
+      white-space: nowrap; flex-shrink: 0;
+    }
+    .quick-todo-form {
+      display: flex; align-items: center; gap: 6px; flex: 1; max-width: 320px;
+    }
+    .quick-todo-input {
+      width: 100%; padding: 4px 10px;
+      background: rgba(0, 0, 0, 0.45); border: 1px solid rgba(0, 212, 255, 0.25);
+      border-radius: 8px; font-size: 0.72rem; color: var(--text-prime);
+      outline: none; transition: border-color 0.2s;
+    }
+    .quick-todo-input:focus {
+      border-color: var(--cyan); box-shadow: 0 0 6px var(--cyan-dim);
+    }
+    .todos-chips-container {
+      display: flex; align-items: center; gap: 8px; overflow-x: auto; padding: 2px 0;
+    }
+    .todo-chip {
+      display: flex; align-items: center; gap: 6px;
+      padding: 3px 10px; border-radius: 12px;
+      background: rgba(0, 212, 255, 0.08); border: 1px solid rgba(0, 212, 255, 0.25);
+      font-size: 0.68rem; color: var(--text-prime); white-space: nowrap; flex-shrink: 0;
+      transition: all 0.2s;
+    }
+    .todo-chip:hover {
+      border-color: rgba(0, 212, 255, 0.5);
+    }
+    .todo-chip-done {
+      cursor: pointer; background: transparent; border: none; color: var(--cyan);
+      font-size: 0.75rem; font-weight: bold; line-height: 1; padding: 0 2px; transition: color 0.2s;
+    }
+    .todo-chip-done:hover {
+      color: var(--green);
+    }
+    .todo-chip-text {
+      max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .todo-chip-delete {
+      cursor: pointer; background: transparent; border: none; color: var(--text-muted);
+      font-size: 0.75rem; line-height: 1; padding: 0 2px; transition: color 0.2s;
+    }
+    .todo-chip-delete:hover {
+      color: var(--red);
+    }
+    .empty-todos-hint {
+      font-size: 0.65rem; color: var(--text-muted); font-style: italic;
+    }
+
     .active-reminders-bar {
       padding: 8px 24px;
       border-bottom: 1px solid rgba(0, 180, 255, 0.12);
@@ -747,11 +816,11 @@
     .reminder-chip {
       display: flex; align-items: center; gap: 6px;
       padding: 3px 10px; border-radius: 12px;
-      background: rgba(0, 212, 255, 0.08); border: 1px solid rgba(0, 212, 255, 0.2);
+      background: rgba(168, 85, 247, 0.1); border: 1px solid rgba(168, 85, 247, 0.25);
       font-size: 0.68rem; color: var(--text-prime); white-space: nowrap; flex-shrink: 0;
     }
     .reminder-chip-time {
-      font-family: var(--font-code); font-size: 0.6rem; color: var(--cyan); opacity: 0.8;
+      font-family: var(--font-code); font-size: 0.6rem; color: #c084fc; opacity: 0.8;
     }
     .reminder-chip-cancel {
       cursor: pointer; background: transparent; border: none; color: var(--text-muted);
@@ -1048,10 +1117,25 @@
           <span class="routine-card-title">Organize Downloads</span>
           <span class="routine-card-desc">Preview sorting files safely</span>
         </div>
+        <div class="routine-card" onclick="quickSend('Help me draft a professional email')">
+          <span class="routine-card-icon">✉️</span>
+          <span class="routine-card-title">Draft an Email</span>
+          <span class="routine-card-desc">Help me draft a professional email</span>
+        </div>
         <div class="routine-card" onclick="quickSend('Read and summarize the text on my screen')">
           <span class="routine-card-icon">🖥️</span>
           <span class="routine-card-title">Read My Screen</span>
           <span class="routine-card-desc">Summarize active window</span>
+        </div>
+        <div class="routine-card" onclick="quickSend('Show my personal to-do list and pending tasks')">
+          <span class="routine-card-icon">📝</span>
+          <span class="routine-card-title">Show My To-Dos</span>
+          <span class="routine-card-desc">View & manage daily tasks</span>
+        </div>
+        <div class="routine-card" onclick="quickSend('Check clipboard history and format text')">
+          <span class="routine-card-icon">📋</span>
+          <span class="routine-card-title">Clipboard Helper</span>
+          <span class="routine-card-desc">Check clipboard & format</span>
         </div>
         <div class="routine-card" onclick="quickSend('Remind me in 15 minutes to take a break')">
           <span class="routine-card-icon">⏰</span>
@@ -1066,10 +1150,23 @@
       </div>
     </div>
 
-    <!-- Active Reminders & Timers Bar in Everyday Mode -->
-    <div class="active-reminders-bar hidden" id="active-reminders-bar">
-      <div class="reminders-bar-label">
-        <span>⏰ Active Reminders (<span id="reminders-count">0</span>):</span>
+    <!-- Interactive My To-Dos & Active Reminders Bar in Everyday Mode -->
+    <div class="todos-reminders-bar" id="todos-reminders-bar">
+      <div class="todos-bar-header">
+        <div class="todos-bar-left">
+          <div class="todos-bar-label">
+            <span>📝 My To-Dos (<span id="todos-count">0</span>):</span>
+          </div>
+          <form class="quick-todo-form" onsubmit="handleQuickTodo(event)">
+            <input type="text" id="quick-todo-input" class="quick-todo-input" placeholder="+ Add quick task (press Enter)..." autocomplete="off" />
+          </form>
+        </div>
+        <div class="reminders-bar-label" id="reminders-bar-header" style="display:none;">
+          <span>⏰ Active Reminders (<span id="reminders-count">0</span>):</span>
+        </div>
+      </div>
+      <div class="todos-chips-container" id="todos-chips-container">
+        <span class="empty-todos-hint">No pending to-dos. Type a quick task above!</span>
       </div>
       <div class="reminders-chips-container" id="reminders-chips-container">
         <!-- Injected dynamically -->
@@ -1545,12 +1642,13 @@ function enterApp() {
   pollMetrics();
   loadAgents();
   loadReminders();
+  loadTodos();
   if (localStorage.getItem('jarvis_onboarding_done') !== 'true') {
     openOnboardingModal();
   }
 }
 
-// ── Reminders Management (Everyday Mode) ─────────────────────
+// ── Reminders & To-Dos Management (Everyday Mode) ───────────
 async function loadReminders() {
   if (!authToken || authToken === 'demo-mode' || authToken === 'no-auth') return;
   try {
@@ -1566,24 +1664,24 @@ async function loadReminders() {
 }
 
 function renderRemindersBar(reminders) {
-  const bar = document.getElementById('active-reminders-bar');
+  const header = document.getElementById('reminders-bar-header');
   const countEl = document.getElementById('reminders-count');
   const container = document.getElementById('reminders-chips-container');
-  if (!bar || !container) return;
+  if (!container) return;
 
   if (!reminders || reminders.length === 0) {
-    bar.classList.add('hidden');
+    if (header) header.style.display = 'none';
     container.innerHTML = '';
     return;
   }
 
-  bar.classList.remove('hidden');
-  countEl.textContent = reminders.length;
+  if (header) header.style.display = 'flex';
+  if (countEl) countEl.textContent = reminders.length;
   container.innerHTML = reminders.map(r => {
     const timeStr = r.trigger_at ? new Date(r.trigger_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Pending';
     return `
       <div class="reminder-chip">
-        <span>${escHtml(r.title)}</span>
+        <span>⏰ ${escHtml(r.title)}</span>
         <span class="reminder-chip-time">${escHtml(timeStr)}</span>
         <button class="reminder-chip-cancel" onclick="cancelReminder('${escHtml(r.reminder_id)}')" title="Cancel reminder">✕</button>
       </div>
@@ -1604,6 +1702,106 @@ async function cancelReminder(reminderId) {
     }
   } catch (e) {
     showToast('Failed to cancel reminder.', 'error');
+  }
+}
+
+async function loadTodos() {
+  if (!authToken || authToken === 'demo-mode' || authToken === 'no-auth') return;
+  try {
+    const res = await fetch(`${API_BASE}/tasks/todos`, {
+      headers: { 'Authorization': `Bearer ${authToken}` }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const pending = data.pending_todos || (data.items ? data.items.filter(i => i.category === 'todo' && i.status === 'pending') : []);
+      renderTodosBar(pending);
+    }
+  } catch (e) {}
+}
+
+function renderTodosBar(todos) {
+  const countEl = document.getElementById('todos-count');
+  const container = document.getElementById('todos-chips-container');
+  if (countEl) countEl.textContent = todos ? todos.length : 0;
+  if (!container) return;
+
+  if (!todos || todos.length === 0) {
+    container.innerHTML = '<span class="empty-todos-hint">No pending to-dos. Type a quick task above!</span>';
+    return;
+  }
+
+  container.innerHTML = todos.map(t => {
+    const text = t.content || t.title || 'Task';
+    return `
+      <div class="todo-chip" id="todo-${escHtml(t.item_id)}">
+        <button class="todo-chip-done" onclick="completeTodo('${escHtml(t.item_id)}')" title="Mark completed">✓</button>
+        <span class="todo-chip-text" title="${escHtml(text)}">${escHtml(text)}</span>
+        <button class="todo-chip-delete" onclick="deleteTodo('${escHtml(t.item_id)}')" title="Delete task">✕</button>
+      </div>
+    `;
+  }).join('');
+}
+
+async function handleQuickTodo(e) {
+  if (e) e.preventDefault();
+  const input = document.getElementById('quick-todo-input');
+  if (!input) return;
+  const text = input.value.trim();
+  if (!text) return;
+  if (!authToken || authToken === 'demo-mode' || authToken === 'no-auth') {
+    showToast('Please log in to add tasks.', 'info');
+    return;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/tasks/todos`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authToken}`
+      },
+      body: JSON.stringify({ content: text, title: text, category: 'todo' })
+    });
+    if (res.ok) {
+      input.value = '';
+      showToast('Task added!', 'success');
+      loadTodos();
+    } else {
+      showToast('Failed to add task.', 'error');
+    }
+  } catch (e) {
+    showToast('Failed to add task.', 'error');
+  }
+}
+
+async function completeTodo(itemId) {
+  if (!authToken) return;
+  try {
+    const res = await fetch(`${API_BASE}/tasks/todos/${encodeURIComponent(itemId)}/complete`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${authToken}` }
+    });
+    if (res.ok) {
+      showToast('Task marked completed!', 'success');
+      loadTodos();
+    }
+  } catch (e) {
+    showToast('Failed to complete task.', 'error');
+  }
+}
+
+async function deleteTodo(itemId) {
+  if (!authToken) return;
+  try {
+    const res = await fetch(`${API_BASE}/tasks/todos/${encodeURIComponent(itemId)}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${authToken}` }
+    });
+    if (res.ok) {
+      showToast('Task removed.', 'info');
+      loadTodos();
+    }
+  } catch (e) {
+    showToast('Failed to delete task.', 'error');
   }
 }
 
@@ -1728,6 +1926,8 @@ async function sendMessage() {
   document.getElementById('send-btn').disabled = false;
   animateViz(false);
   setSystemStatus(isListening ? 'LISTENING...' : 'SYSTEMS ONLINE', isListening ? 'gold' : 'green');
+  loadTodos();
+  loadReminders();
 }
 
 // ── Task Execution ───────────────────────────────────────────
@@ -1766,6 +1966,8 @@ async function executeTask(taskDesc) {
   isSending = false;
   document.getElementById('send-btn').disabled = false;
   animateViz(false);
+  loadTodos();
+  loadReminders();
 }
 
 // ── Chat DOM Helpers ─────────────────────────────────────────

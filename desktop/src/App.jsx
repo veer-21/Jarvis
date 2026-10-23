@@ -3,7 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { 
   Terminal, Activity, BrainCircuit, Lock, Volume2, 
   Sparkles, Clock, Folder, CheckCircle2, XCircle, AlertCircle, 
-  ShieldCheck, Sliders, RefreshCw, ChevronRight, Wand2
+  ShieldCheck, Sliders, RefreshCw, ChevronRight, Wand2,
+  CheckSquare, Plus, Trash2, ListTodo, Clipboard, Globe
 } from 'lucide-react'
 
 // ─── Sub-Components ─────────────────────────────────────────────────────────
@@ -426,6 +427,8 @@ function App() {
   })
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [reminders, setReminders] = useState([])
+  const [todos, setTodos] = useState([])
+  const [newTodoText, setNewTodoText] = useState('')
   const wsRef = useRef(null)
   const chatEndRef = useRef(null)
 
@@ -453,6 +456,7 @@ function App() {
         setMessages([{ sender: 'JARVIS', text: 'Authentication accepted. Welcome back, Sir.' }])
         connectWebSocket(data.access_token)
         fetchReminders(data.access_token)
+        fetchTodos(data.access_token)
         if (localStorage.getItem('jarvis_onboarding_done') !== 'true') {
           setShowOnboarding(true)
         }
@@ -491,6 +495,71 @@ function App() {
     }
   }
 
+  const fetchTodos = async (authToken) => {
+    try {
+      const res = await fetch('http://localhost:7799/tasks/todos', {
+        headers: { 'Authorization': `Bearer ${authToken || token}` }
+      })
+      if (res.ok) {
+        const data = await res.json()
+        const pending = data.pending_todos || (data.items ? data.items.filter(i => i.category === 'todo' && i.status === 'pending') : [])
+        setTodos(pending)
+      }
+    } catch (e) {
+      console.error("Failed to fetch to-dos:", e)
+    }
+  }
+
+  const handleAddTodo = async (e) => {
+    if (e) e.preventDefault()
+    const text = newTodoText.trim()
+    if (!text) return
+    try {
+      const res = await fetch('http://localhost:7799/tasks/todos', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ content: text, title: text, category: 'todo' })
+      })
+      if (res.ok) {
+        setNewTodoText('')
+        fetchTodos(token)
+      }
+    } catch (e) {
+      console.error("Failed to add to-do:", e)
+    }
+  }
+
+  const handleCompleteTodo = async (itemId) => {
+    try {
+      const res = await fetch(`http://localhost:7799/tasks/todos/${encodeURIComponent(itemId)}/complete`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      if (res.ok) {
+        fetchTodos(token)
+      }
+    } catch (e) {
+      console.error("Failed to complete to-do:", e)
+    }
+  }
+
+  const handleDeleteTodo = async (itemId) => {
+    try {
+      const res = await fetch(`http://localhost:7799/tasks/todos/${encodeURIComponent(itemId)}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      if (res.ok) {
+        fetchTodos(token)
+      }
+    } catch (e) {
+      console.error("Failed to delete to-do:", e)
+    }
+  }
+
   const connectWebSocket = (authToken) => {
     const ws = new WebSocket('ws://localhost:7799/ws/jarvis')
     ws.onopen = () => setStatus('ONLINE')
@@ -502,6 +571,7 @@ function App() {
         setStatus(data.status)
         if (data.status === 'ONLINE' || data.status === 'IDLE') {
           fetchReminders(authToken || token)
+          fetchTodos(authToken || token)
         }
       } else if (data.chunk) {
         setMessages(prev => {
@@ -528,6 +598,7 @@ function App() {
         setPendingConfirmation(null)
       } else if (data.type === 'reminder_triggered') {
         fetchReminders(token)
+        fetchTodos(token)
         setMessages(prev => [
           ...prev,
           {
@@ -538,6 +609,8 @@ function App() {
         ])
       } else if (data.type === 'TASK_CANCELLED') {
         setStatus('IDLE')
+        fetchTodos(token)
+        fetchReminders(token)
         setMessages(prev => [
           ...prev,
           { 
@@ -566,6 +639,13 @@ function App() {
     }
     wsRef.current = ws
   }
+
+  useEffect(() => {
+    if (token) {
+      fetchReminders(token)
+      fetchTodos(token)
+    }
+  }, [token])
 
   const sendQuery = (text) => {
     if (!text.trim() || !wsRef.current) return
@@ -789,56 +869,110 @@ function App() {
                 </span>
                 <span className="text-[10px] text-gray-500 font-mono">Ready to assist</span>
               </div>
-              <div className="grid grid-cols-5 gap-3">
+              <div className="grid grid-cols-4 lg:grid-cols-8 gap-2.5">
                 {[
                   { title: "Morning Briefing", desc: "Weather, tasks, system stats", cmd: "Give me my daily briefing", icon: "🌅" },
                   { title: "Organize Downloads", desc: "Clean cluttered files safely", cmd: "Preview organizing my Downloads folder", icon: "📁" },
+                  { title: "Draft an Email", desc: "Help me draft a professional email", cmd: "Help me draft a professional email", icon: "✉️" },
                   { title: "Read My Screen", desc: "Summarize active window", cmd: "Read and summarize the text on my screen", icon: "🖥️" },
+                  { title: "Show My To-Dos", desc: "View & manage daily tasks", cmd: "Show my personal to-do list and pending tasks", icon: "📝" },
+                  { title: "Clipboard Helper", desc: "Check clipboard & format", cmd: "Check clipboard history and format text", icon: "📋" },
                   { title: "Quick Reminder", desc: "Break timer in 15 mins", cmd: "Remind me in 15 minutes to take a break", icon: "⏰" },
                   { title: "Health Check", desc: "Speed, CPU & RAM status", cmd: "Check my computer's speed, CPU, and memory", icon: "⚡" },
                 ].map((card, idx) => (
                   <button
                     key={idx}
                     onClick={() => sendQuery(card.cmd)}
-                    className="flex flex-col text-left p-3 rounded-2xl bg-white/5 hover:bg-cyan-500/10 border border-white/5 hover:border-cyan-500/30 transition-all group"
+                    className="flex flex-col text-left p-2.5 rounded-2xl bg-white/5 hover:bg-cyan-500/10 border border-white/5 hover:border-cyan-500/30 transition-all group"
                   >
-                    <span className="text-xl mb-1">{card.icon}</span>
-                    <span className="text-xs font-semibold text-gray-200 group-hover:text-cyan-300 transition-colors">{card.title}</span>
+                    <span className="text-lg mb-0.5">{card.icon}</span>
+                    <span className="text-xs font-semibold text-gray-200 group-hover:text-cyan-300 transition-colors truncate">{card.title}</span>
                     <span className="text-[10px] text-gray-500 line-clamp-1">{card.desc}</span>
                   </button>
                 ))}
               </div>
             </div>
 
-            {/* Active Reminders & Timers Bar */}
-            {reminders.length > 0 && (
-              <div className="px-6 py-2.5 bg-cyan-950/20 border-b border-cyan-500/20 flex items-center gap-3 overflow-x-auto">
-                <div className="flex items-center gap-1.5 text-cyan-400 text-xs font-semibold shrink-0">
-                  <Clock size={13} className="text-cyan-400" />
-                  <span>Active Reminders ({reminders.length}):</span>
+            {/* My To-Dos & Active Reminders Bar */}
+            <div className="px-6 py-2.5 bg-cyan-950/20 border-b border-cyan-500/20 flex flex-col gap-2">
+              <div className="flex items-center justify-between gap-4">
+                {/* To-Do Quick Add & Title */}
+                <div className="flex items-center gap-3 flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 text-cyan-400 text-xs font-semibold shrink-0">
+                    <CheckSquare size={13} className="text-cyan-400" />
+                    <span>My To-Dos ({todos.length}):</span>
+                  </div>
+                  <form onSubmit={handleAddTodo} className="flex items-center gap-1.5 flex-1 max-w-sm">
+                    <input
+                      type="text"
+                      value={newTodoText}
+                      onChange={(e) => setNewTodoText(e.target.value)}
+                      placeholder="+ Add quick task (press Enter)..."
+                      className="w-full bg-black/40 border border-cyan-500/20 focus:border-cyan-400/50 rounded-lg px-2.5 py-1 text-xs text-white placeholder-gray-500 focus:outline-none"
+                    />
+                  </form>
                 </div>
-                <div className="flex items-center gap-2 overflow-x-auto py-0.5">
-                  {reminders.map((rem) => (
-                    <div
-                      key={rem.reminder_id}
-                      className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/25 text-xs text-gray-200 shrink-0"
-                    >
-                      <span className="font-medium text-cyan-200">{rem.title}</span>
-                      <span className="text-[10px] text-cyan-400/70 font-mono">
-                        {rem.trigger_at ? new Date(rem.trigger_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Pending'}
-                      </span>
-                      <button
-                        onClick={() => cancelReminder(rem.reminder_id)}
-                        title="Cancel reminder"
-                        className="w-4 h-4 rounded-full flex items-center justify-center text-gray-400 hover:text-red-400 hover:bg-white/10 transition-colors ml-0.5"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  ))}
-                </div>
+
+                {/* Active Reminders Header */}
+                {reminders.length > 0 && (
+                  <div className="flex items-center gap-1.5 text-cyan-400 text-xs font-semibold shrink-0">
+                    <Clock size={13} className="text-cyan-400" />
+                    <span>Active Reminders ({reminders.length}):</span>
+                  </div>
+                )}
               </div>
-            )}
+
+              {/* Items Row: To-Dos Chips & Reminder Chips */}
+              <div className="flex items-center gap-2 overflow-x-auto py-0.5">
+                {todos.length === 0 && reminders.length === 0 && (
+                  <span className="text-[11px] text-gray-500 italic">No pending to-dos or active reminders. Type a quick task above!</span>
+                )}
+                {todos.map((todo) => (
+                  <div
+                    key={todo.item_id}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-xs text-gray-200 shrink-0 group hover:border-cyan-400/50 transition-colors"
+                  >
+                    <button
+                      onClick={() => handleCompleteTodo(todo.item_id)}
+                      title="Mark as completed"
+                      className="w-4 h-4 rounded-full flex items-center justify-center text-cyan-400 hover:text-emerald-300 hover:bg-emerald-500/20 transition-colors font-bold text-[10px]"
+                    >
+                      ✓
+                    </button>
+                    <span className="font-medium text-gray-200 max-w-[200px] truncate" title={todo.content || todo.title}>
+                      {todo.content || todo.title}
+                    </span>
+                    <button
+                      onClick={() => handleDeleteTodo(todo.item_id)}
+                      title="Delete task"
+                      className="w-4 h-4 rounded-full flex items-center justify-center text-gray-400 hover:text-red-400 hover:bg-white/10 transition-colors ml-0.5"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+
+                {reminders.map((rem) => (
+                  <div
+                    key={rem.reminder_id}
+                    className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-purple-500/10 border border-purple-500/30 text-xs text-purple-200 shrink-0"
+                  >
+                    <Clock size={11} className="text-purple-400" />
+                    <span className="font-medium text-purple-100">{rem.title}</span>
+                    <span className="text-[10px] text-purple-300/80 font-mono">
+                      {rem.trigger_at ? new Date(rem.trigger_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Pending'}
+                    </span>
+                    <button
+                      onClick={() => cancelReminder(rem.reminder_id)}
+                      title="Cancel reminder"
+                      className="w-4 h-4 rounded-full flex items-center justify-center text-gray-400 hover:text-red-400 hover:bg-white/10 transition-colors ml-0.5"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
 
             {/* Conversational Stream */}
             <div className="flex-1 overflow-y-auto p-6 space-y-4 select-text">

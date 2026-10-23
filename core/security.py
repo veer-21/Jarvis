@@ -499,6 +499,8 @@ class SecurityGuard:
                 effective_risk = RiskLevel.READ_ONLY
         elif t_low == "read_and_summarize_webpage":
             effective_risk = RiskLevel.READ_ONLY
+        elif t_low == "compose_and_launch_message":
+            effective_risk = RiskLevel.LOW_RISK
 
         requires_confirmation = effective_risk in (RiskLevel.HIGH_RISK, RiskLevel.CRITICAL)
 

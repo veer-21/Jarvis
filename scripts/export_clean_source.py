@@ -5,11 +5,14 @@ strictly excluding virtual environments, dependencies, build caches, git objects
 """
 
 import os
+import shutil
 import zipfile
 from pathlib import Path
 
 WORKSPACE_ROOT = Path(r"D:\Jarvis")
 OUTPUT_ZIP_PATH = WORKSPACE_ROOT / "jarvis_clean_source.zip"
+OUTPUT_PHASE6_ZIP_PATH = WORKSPACE_ROOT / "jarvis_phase6_clean_source.zip"
+OUTPUT_ZIP_PATHS = [OUTPUT_ZIP_PATH, OUTPUT_PHASE6_ZIP_PATH]
 
 EXCLUDED_DIR_NAMES = {
     "venv",
@@ -38,6 +41,8 @@ EXCLUDED_FILENAMES = {
     "desktop_folder_without_nodemodules.zip",
     "jarvis_clean_source.zip",
     "jarvis_phase_verification.zip",
+    "jarvis_phase6_clean_source.zip",
+    "jarvis_phase6_verification.zip",
 }
 
 
@@ -72,6 +77,10 @@ def build_clean_source_zip():
     print(f"Successfully packaged {file_count} clean source files.")
     print(f"Uncompressed size: {total_uncompressed_bytes:,} bytes")
     print(f"Archive size: {zip_size:,} bytes")
+
+    # Also output Phase 6 named archive
+    shutil.copyfile(OUTPUT_ZIP_PATH, OUTPUT_PHASE6_ZIP_PATH)
+    print(f"Successfully mirrored to {OUTPUT_PHASE6_ZIP_PATH} ({OUTPUT_PHASE6_ZIP_PATH.stat().st_size} bytes)")
     print("=== Clean Source ZIP Generation Complete ===")
 
 
