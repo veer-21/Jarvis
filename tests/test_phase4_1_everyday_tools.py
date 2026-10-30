@@ -37,6 +37,64 @@ from tools.everyday_tools import (
 )
 
 
+@pytest.fixture(autouse=True)
+def isolate_everyday_test_environment():
+    """Backup and restore reminders.json, personal_todos.json, and .env so tests never pollute storage."""
+    reminders_bak = None
+    if REMINDERS_FILE.exists():
+        try:
+            with open(REMINDERS_FILE, "r", encoding="utf-8") as f:
+                reminders_bak = f.read()
+        except Exception:
+            reminders_bak = None
+
+    todos_file = PROJECT_ROOT / "data" / "tasks" / "personal_todos.json"
+    todos_bak = None
+    if todos_file.exists():
+        try:
+            with open(todos_file, "r", encoding="utf-8") as f:
+                todos_bak = f.read()
+        except Exception:
+            todos_bak = None
+
+    env_file = PROJECT_ROOT / ".env"
+    env_bak = None
+    if env_file.exists():
+        try:
+            with open(env_file, "r", encoding="utf-8") as f:
+                env_bak = f.read()
+        except Exception:
+            env_bak = None
+
+    orig_env = dict(os.environ)
+
+    yield
+
+    os.environ.clear()
+    os.environ.update(orig_env)
+
+    if reminders_bak is not None:
+        with open(REMINDERS_FILE, "w", encoding="utf-8") as f:
+            f.write(reminders_bak)
+    elif REMINDERS_FILE.exists():
+        try:
+            with open(REMINDERS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            cleaned = [r for r in data if not any(k in r.get("title", "") for k in ("Test Reminder", "Verifier Test", "Meeting"))]
+            with open(REMINDERS_FILE, "w", encoding="utf-8") as f:
+                json.dump(cleaned, f, indent=2)
+        except Exception:
+            pass
+
+    if todos_bak is not None:
+        with open(todos_file, "w", encoding="utf-8") as f:
+            f.write(todos_bak)
+
+    if env_bak is not None:
+        with open(env_file, "w", encoding="utf-8") as f:
+            f.write(env_bak)
+
+
 @pytest.fixture
 def temp_test_dir():
     """Create a temporary directory with test files and tear it down after test."""

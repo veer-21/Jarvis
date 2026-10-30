@@ -26,9 +26,9 @@ class ContinuousVoiceManager:
       1. Local IntentClassifier (instant) for simple commands
       2. Brain (LLM) for complex queries
     """
-    def __init__(self, brain=None):
+    def __init__(self, brain=None, voice: Optional[VoiceInterface] = None):
         self.brain = brain
-        self.voice = VoiceInterface()
+        self.voice = voice if voice is not None else VoiceInterface()
         self.intent_classifier = IntentClassifier()
         self.is_running = False
         self._thread: Optional[threading.Thread] = None

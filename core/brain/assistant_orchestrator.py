@@ -539,15 +539,43 @@ class AssistantOrchestrator:
                         return
 
             # For multi-step tasks, yield progress updates and then delegate to process
-            yield "[PLANNING] Analyzing goal and decomposing into steps...\n"
+            session_id = getattr(context, "session_id", None) if context else None
+            try:
+                from api.ws_manager import ws_manager
+                if session_id:
+                    await ws_manager.send_status_to_session(session_id, "THINKING")
+            except Exception:
+                pass
+
+            planning_chunk = "[PLANNING] Analyzing goal and decomposing into steps...\n"
+            try:
+                from api.ws_manager import ws_manager
+                if session_id:
+                    await ws_manager.send_chunk_to_session(session_id, planning_chunk)
+            except Exception:
+                pass
+            yield planning_chunk
             await asyncio.sleep(0)
 
             # Unregister the stream task shell before delegating to full process DAG
             self._unregister_active_task(task)
             task = None
             response = await asyncio.to_thread(self.process, raw_text, context)
+            try:
+                from api.ws_manager import ws_manager
+                if session_id:
+                    await ws_manager.send_chunk_to_session(session_id, response)
+            except Exception:
+                pass
             yield response
         finally:
+            try:
+                from api.ws_manager import ws_manager
+                session_id = getattr(context, "session_id", None) if context else None
+                if session_id:
+                    await ws_manager.send_status_to_session(session_id, "IDLE")
+            except Exception:
+                pass
             if task and task.status not in (TaskStatus.WAITING_FOR_INPUT, TaskStatus.WAITING_FOR_CONFIRMATION):
                 self._unregister_active_task(task)
             current_execution_context.reset(ctx_token)
@@ -559,39 +587,32 @@ class AssistantOrchestrator:
         Create a validated TaskStep DAG plan.
         Combines deterministic fast-path patterns with general LLM-driven planning.
         """
+        # 1. Check deterministic consumer/system heuristics FIRST!
+        heuristic_plan = self._heuristic_plan_decomposition(user_request)
+        is_generic_fallback = (
+            len(heuristic_plan) == 1
+            and heuristic_plan[0].description == "Process user request and respond"
+            and not heuristic_plan[0].tool_name
+        )
+
+        if not is_generic_fallback:
+            return heuristic_plan
+
+        # 2. Only if _heuristic_plan_decomposition falls through to the generic single-step
+        # "Process user request and respond" reasoning fallback, optionally consult
+        # _create_plan_general(user_request) when the request clearly asks for a multi-step workflow.
         req_lower = user_request.lower()
-
-        # 1. Fast-Path Heuristic: Single app launch
-        if req_lower.startswith("open ") and (" and " not in req_lower or "running" in req_lower):
-            app_match = re.search(r"open\s+([a-zA-Z0-9_\-\s]+?)(?:\s+and\s+tell|\s+and\s+verify|$)", req_lower)
-            app_name = app_match.group(1).strip() if app_match else "notepad"
-            return [
-                TaskStep(
-                    step_id="step_1",
-                    description=f"Launch application '{app_name}'",
-                    capability="desktop",
-                    tool_name="open_application",
-                    input_variables={"app_name": app_name},
-                    output_variables=["app_status"],
-                    dependencies=[]
-                ),
-                TaskStep(
-                    step_id="step_2",
-                    description=f"Verify if '{app_name}' is actively running",
-                    capability="reasoning",
-                    input_variables={"status": "{{step_1.app_status}}"},
-                    dependencies=["step_1"]
-                )
-            ]
-
-        # 2. General LLM-driven planning
-        if self.reasoning:
+        is_multi_step_workflow = any(
+            marker in req_lower for marker in (
+                " and then ", " then ", " after that ", " first ", "step 1", "workflow", "steps", "pipeline", "dag"
+            )
+        )
+        if self.reasoning and (is_multi_step_workflow or intent_type == "task"):
             general_plan = self._create_plan_general(user_request)
             if general_plan:
                 return general_plan
 
-        # 3. Fallback Heuristic Decomposition
-        return self._heuristic_plan_decomposition(user_request)
+        return heuristic_plan
 
     def _create_plan_general(self, user_request: str) -> Optional[list[TaskStep]]:
         """
@@ -658,6 +679,29 @@ JSON:"""
     def _heuristic_plan_decomposition(self, user_request: str) -> list[TaskStep]:
         """Intelligent heuristic fallback plan decomposition."""
         req_lower = user_request.lower()
+
+        # Single app launch
+        if req_lower.startswith("open ") and (" and " not in req_lower or "running" in req_lower):
+            app_match = re.search(r"open\s+([a-zA-Z0-9_\-\s]+?)(?:\s+and\s+tell|\s+and\s+verify|$)", req_lower)
+            app_name = app_match.group(1).strip() if app_match else "notepad"
+            return [
+                TaskStep(
+                    step_id="step_1",
+                    description=f"Launch application '{app_name}'",
+                    capability="desktop",
+                    tool_name="open_application",
+                    input_variables={"app_name": app_name},
+                    output_variables=["app_status"],
+                    dependencies=[]
+                ),
+                TaskStep(
+                    step_id="step_2",
+                    description=f"Verify if '{app_name}' is actively running",
+                    capability="reasoning",
+                    input_variables={"status": "{{step_1.app_status}}"},
+                    dependencies=["step_1"]
+                )
+            ]
 
         # Multi-step: Active Window & Screen Context -> Reasoning (Phase 4.3)
         if (hasattr(self, "context_tracker") and self.context_tracker.is_active_context_request(user_request)) or \
@@ -1486,9 +1530,11 @@ JSON:"""
                 f"You executed the following task plan successfully:\n{outputs_summary}\n\n"
                 "Respond to the user with a helpful, natural, and accurate summary of the results."
             )
-            return self.reasoning.generate_text(prompt)
+            res = self.reasoning.generate_text(prompt)
+            if res and res.strip():
+                return res
 
-        return list(step_outputs.values())[-1]
+        return str(list(step_outputs.values())[-1])
 
     def _extract_candidates(self, tool_name: str, output: Any) -> list[str]:
         """Extract candidate items from tool outputs for referential follow-up."""

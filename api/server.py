@@ -66,6 +66,23 @@ _START_TIME: float = 0.0
 _brain:   JarvisBrain  | None = None
 _memory:  JarvisMemory | None = None
 _voice_mgr = None
+_voice_interface_singleton = None
+
+
+def _get_voice_interface():
+    """Cached singleton voice interface to avoid reloading faster-whisper on every call."""
+    global _voice_interface_singleton, _voice_mgr
+    if _voice_mgr and hasattr(_voice_mgr, "voice") and _voice_mgr.voice is not None:
+        return _voice_mgr.voice
+    if _voice_interface_singleton is None:
+        from core.voice import VoiceInterface
+        _voice_interface_singleton = VoiceInterface()
+    return _voice_interface_singleton
+
+
+def set_server_voice_interface(voice_interface):
+    global _voice_interface_singleton
+    _voice_interface_singleton = voice_interface
 
 
 # ─── Lifespan (startup / shutdown) ───────────────────────────────────────────
@@ -149,7 +166,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             try:
                 from core.voice_manager import ContinuousVoiceManager
                 global _voice_mgr
-                _voice_mgr = ContinuousVoiceManager(brain=_brain)
+                _voice_mgr = ContinuousVoiceManager(brain=_brain, voice=_get_voice_interface())
                 _voice_mgr.start()
             except Exception as voice_err:
                 error_log.error(f"Resilient Voice Manager startup fallback: {voice_err}")
@@ -359,10 +376,11 @@ async def chat_stream(body: ChatRequest, auth: AuthRequired):
 
 @app.post("/voice/toggle", response_model=SuccessResponse, tags=["Voice"])
 async def toggle_voice(auth: AuthRequired):
-    """Toggle continuous voice listening."""
+    """Toggle continuous voice listening with resilient lazy initialization."""
     global _voice_mgr
     if not _voice_mgr:
-        raise HTTPException(status_code=503, detail="Voice manager not running.")
+        from core.voice_manager import ContinuousVoiceManager
+        _voice_mgr = ContinuousVoiceManager(brain=_get_brain(), voice=_get_voice_interface())
         
     if _voice_mgr.is_running:
         _voice_mgr.stop()
@@ -370,6 +388,50 @@ async def toggle_voice(auth: AuthRequired):
     else:
         _voice_mgr.start()
         return SuccessResponse(message="Voice listening resumed.")
+
+
+@app.post("/voice/listen", tags=["Voice"])
+async def voice_listen(auth: AuthRequired):
+    """
+    Direct single-utterance voice listening endpoint.
+    Records from the microphone (up to 8 seconds), transcribes, routes through brain,
+    speaks the response in a background thread, and returns the transcript and response.
+    """
+    voice_interface = _get_voice_interface()
+    brain = _get_brain()
+    caller_user = _extract_auth_user(auth)
+    caller_session = _extract_auth_session(auth)
+
+    try:
+        transcript = await asyncio.wait_for(
+            asyncio.to_thread(voice_interface.listen, False, None, 8.0),
+            timeout=15.0
+        )
+    except asyncio.TimeoutError:
+        return {"success": False, "transcript": "", "response": "No speech detected within listening window."}
+    except Exception as e:
+        log.warning(f"Voice listen execution error: {e}")
+        return {"success": False, "transcript": "", "response": f"Voice listen error: {e}"}
+
+    if not transcript or not str(transcript).strip():
+        return {"success": False, "transcript": "", "response": "No speech detected."}
+
+    clean_transcript = str(transcript).strip()
+    from core.brain.task_model import ExecutionContext
+    ctx = ExecutionContext(user_id=caller_user, session_id=caller_session, store_memory=True)
+    response = await asyncio.to_thread(brain.process_input, clean_transcript, context=ctx)
+
+    # Speak response via TTS in a background thread
+    def _speak_bg():
+        try:
+            voice_interface.speak(response)
+        except Exception as se:
+            log.warning(f"Background voice speak error: {se}")
+
+    import threading
+    threading.Thread(target=_speak_bg, daemon=True).start()
+
+    return {"success": True, "transcript": clean_transcript, "response": response}
 
 from pydantic import BaseModel
 
@@ -394,18 +456,23 @@ class TTSRequest(BaseModel):
 
 @app.post("/voice/tts", response_model=SuccessResponse, tags=["Voice"])
 async def test_tts(body: TTSRequest, auth: AuthRequired):
-    """Test text-to-speech engine."""
-    from core.voice import VoiceInterface
+    """
+    Test text-to-speech engine non-blockingly without event loop deadlock.
+    Speaks via Windows SAPI5 in a background daemon thread without reloading Whisper.
+    """
     try:
-        tts = VoiceInterface()
-        import threading
-        
-        # Create a simple generator that yields the text
-        def text_generator():
-            yield body.text
-            
-        dummy_event = threading.Event()
-        tts.speak_stream(text_generator(), dummy_event)
+        tts = _get_voice_interface()
+        raw_text = body.text or ""
+        import re
+        clean_text = re.sub(r"[*_`~#>\[\]\(\)\{\}\\]", "", str(raw_text))
+        clean_text = re.sub(r"\s+", " ", clean_text).strip()
+        clean_text = re.sub(r"\s+([,.:;?!])", r"\1", clean_text)
+        tts._last_spoken_text = clean_text
+
+        if clean_text:
+            import threading
+            threading.Thread(target=tts._speak_windows_sapi, args=(clean_text,), daemon=True).start()
+
         return SuccessResponse(message="TTS executed successfully.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -491,6 +558,7 @@ async def websocket_jarvis(ws: WebSocket):
                 )
                 ws_manager.register_active_task(session_id, ctx)
                 try:
+                    await ws_manager.send_status_to_session(session_id, "THINKING")
                     async for chunk in brain.process_input_stream(message, interrupt_event=cancel_token, context=ctx):
                         if cancel_token.is_set():
                             break
@@ -501,6 +569,7 @@ async def websocket_jarvis(ws: WebSocket):
                     await ws_manager.send_status_to_session(session_id, "ERROR")
                     await ws.send_json({"error": str(e)})
                 finally:
+                    await ws_manager.send_status_to_session(session_id, "IDLE")
                     ws_manager.unregister_active_task(session_id)
 
             elif cmd == "interrupt":
@@ -795,6 +864,58 @@ async def interrupt_task(body: TaskInterruptRequest, auth: AuthRequired):
             "cancelled": cancelled
         })
     return SuccessResponse(message="Task cancellation signalled.")
+
+
+@app.post("/tasks/reset-state", response_model=SuccessResponse, tags=["Tasks"])
+async def reset_task_state(auth: AuthRequired):
+    """
+    1-click Reset / Unstick state:
+    Cancels active tasks, clears LLM session histories, purges stuck test reminders,
+    and resets the chat session to IDLE.
+    """
+    caller_user = _extract_auth_user(auth)
+    caller_session = _extract_auth_session(auth)
+    
+    # 1. Cancel active task for session and unstick status
+    try:
+        ws_manager.cancel_active_task(caller_session, reason="User triggered 1-click state reset")
+        await ws_manager.send_status_to_session(caller_session, "IDLE")
+    except Exception as e:
+        log.warning(f"Error cancelling task in reset-state: {e}")
+
+    # 2. Reset brain reasoning session histories & chat session
+    try:
+        brain = _get_brain()
+        if hasattr(brain, "reasoning"):
+            brain.reasoning._session_histories.clear()
+            brain.reasoning._session_chats.clear()
+            brain.reasoning._current_provider = "gemini" if brain.reasoning._client else "fallback"
+        if hasattr(brain, "reset_chat"):
+            brain.reset_chat()
+        if hasattr(brain, "orchestrator"):
+            brain.orchestrator.active_task = None
+            if hasattr(brain.orchestrator, "context_tracker"):
+                brain.orchestrator.context_tracker.set_active_task(None)
+    except Exception as e:
+        log.warning(f"Error resetting brain in reset-state: {e}")
+
+    # 3. Clean stuck test reminders from reminders.json
+    try:
+        from tools.everyday_tools import REMINDERS_FILE, _reminders_lock
+        with _reminders_lock:
+            if REMINDERS_FILE.exists():
+                with open(REMINDERS_FILE, "r", encoding="utf-8") as f:
+                    rems = json.load(f)
+                cleaned = [
+                    r for r in rems
+                    if not any(k in r.get("title", "") for k in ("Test Reminder", "Verifier Test", "Meeting"))
+                ]
+                with open(REMINDERS_FILE, "w", encoding="utf-8") as f:
+                    json.dump(cleaned, f, indent=2)
+    except Exception as e:
+        log.warning(f"Error cleaning reminders in reset-state: {e}")
+
+    return SuccessResponse(message="State reset successfully. Active tasks cancelled, session histories cleared, and test reminders purged.")
 
 
 @app.get("/tasks/history", tags=["Tasks"])
@@ -1174,14 +1295,28 @@ def _check_diagnostics_internal() -> dict[str, Any]:
     from datetime import datetime, timezone
 
     # 1. LLM Readiness
-    has_gemini = bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
-    has_fallback = bool(os.environ.get("GROQ_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("OLLAMA_HOST"))
-    llm_ready = has_gemini or has_fallback
-    if has_gemini:
+    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or ""
+    is_mock_or_placeholder = any(k in gemini_key for k in ("TestMockKey", "your_key_here", "your_gemini_key_here"))
+    has_gemini = bool(gemini_key) and not is_mock_or_placeholder
+
+    groq_key = os.environ.get("GROQ_API_KEY") or ""
+    openai_key = os.environ.get("OPENAI_API_KEY") or ""
+    ollama_host = os.environ.get("OLLAMA_HOST") or ""
+    has_valid_groq = bool(groq_key) and not any(k in groq_key for k in ("your_key_here", "TestMockKey"))
+    has_valid_openai = bool(openai_key) and not any(k in openai_key for k in ("your_key_here", "TestMockKey"))
+    has_fallback = has_valid_groq or has_valid_openai or bool(ollama_host)
+
+    if is_mock_or_placeholder:
+        llm_ready = False
+        llm_details = "Gemini API key is placeholder or mock key. Please enter a valid Gemini API key in Setup Wizard."
+    elif has_gemini:
+        llm_ready = True
         llm_details = "Google Gemini API key configured and operational."
     elif has_fallback:
+        llm_ready = True
         llm_details = "Fallback LLM engine key configured."
     else:
+        llm_ready = False
         llm_details = "No LLM API key detected in .env. Configure GEMINI_API_KEY."
 
     # 2. Voice STT Readiness

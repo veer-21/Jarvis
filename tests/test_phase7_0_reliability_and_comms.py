@@ -33,9 +33,37 @@ from tools.everyday_tools import (
 
 
 @pytest.fixture(autouse=True)
-def cleanup_active_timers():
-    """Ensure no background timers leak between test cases."""
+def isolate_reliability_test_environment():
+    """Ensure no background timers leak and isolate reminders, todos, and .env."""
+    reminders_file = Path(r"D:\Jarvis\data\tasks\reminders.json")
+    reminders_bak = None
+    if reminders_file.exists():
+        try:
+            with open(reminders_file, "r", encoding="utf-8") as f:
+                reminders_bak = f.read()
+        except Exception:
+            reminders_bak = None
+
+    todos_file = Path(r"D:\Jarvis\data\tasks\personal_todos.json")
+    todos_bak = None
+    if todos_file.exists():
+        try:
+            with open(todos_file, "r", encoding="utf-8") as f:
+                todos_bak = f.read()
+        except Exception:
+            todos_bak = None
+
+    env_file = Path(r"D:\Jarvis\.env")
+    env_bak = None
+    if env_file.exists():
+        try:
+            with open(env_file, "r", encoding="utf-8") as f:
+                env_bak = f.read()
+        except Exception:
+            env_bak = None
+
     yield
+
     with _reminders_lock:
         for tid, timer in list(_active_timer_threads.items()):
             try:
@@ -43,6 +71,18 @@ def cleanup_active_timers():
             except Exception:
                 pass
         _active_timer_threads.clear()
+
+    if reminders_bak is not None:
+        with open(reminders_file, "w", encoding="utf-8") as f:
+            f.write(reminders_bak)
+
+    if todos_bak is not None:
+        with open(todos_file, "w", encoding="utf-8") as f:
+            f.write(todos_bak)
+
+    if env_bak is not None:
+        with open(env_file, "w", encoding="utf-8") as f:
+            f.write(env_bak)
 
 
 # ─── 1. Reminder Recovery on Startup ──────────────────────────────────────────

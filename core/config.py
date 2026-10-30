@@ -19,7 +19,7 @@ def get_primary_engine():
     return os.environ.get("PRIMARY_ENGINE", "gemini").lower()
 
 def get_groq_model():
-    return os.environ.get("GROQ_MODEL", "qwen/qwen3.8-27b")
+    return os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 def get_model_name():
     return os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")

@@ -196,7 +196,11 @@ class VoiceInterface:
     def listen_for_wake_word(self) -> bool:
         """Blocks until the wake word is detected."""
         time.sleep(0.05)
+        # If Porcupine is not configured, check if continuous voice mode is active
         if not self.wake_word_engine or not self.pa:
+            if os.getenv("JARVIS_VOICE_CONTINUOUS", "1") == "1":
+                print("\n[🎙️ Continuous Voice Mode active (wake-word-free): Listening directly for speech...]")
+                return True
             # Fallback if Porcupine isn't setup - wait for PTT only
             print(f"\n[🎙️ JARVIS is sleeping... Press {self.ptt_hotkey.upper()} to wake]")
             t_start = time.perf_counter()
@@ -260,7 +264,11 @@ class VoiceInterface:
                             self.last_metrics['wakeword_detection_latency'] = (time.perf_counter() - t_start) * 1000
                             return True
                     else:
-                        # Offline wake word engine is not configured; rely on Push-to-Talk (F9)
+                        # Offline wake word engine is not configured
+                        if os.getenv("JARVIS_VOICE_CONTINUOUS", "1") == "1":
+                            print("\n[🎙️ Continuous Voice Mode active: Listening directly for speech...]")
+                            return True
+                        # rely on Push-to-Talk (F9)
                         time.sleep(0.1)
         except Exception as e:
             print(f"[⚠️ Wake Word Listening Error]: {e}")
@@ -273,7 +281,7 @@ class VoiceInterface:
                 except Exception:
                     pass
 
-    def listen(self, wait_for_wake_word: bool = False, interrupt_event: threading.Event = None) -> str:
+    def listen(self, wait_for_wake_word: bool = False, interrupt_event: threading.Event = None, timeout: Optional[float] = None) -> str:
         """
         Listens until speech is detected, then records until silence via VAD.
         Returns the transcription.
@@ -325,10 +333,16 @@ class VoiceInterface:
                     self.pa = pyaudio.PyAudio()
                     stream = self.pa.open(**stream_kwargs)
                 
+                t_listen_start = time.perf_counter()
+                max_silence_timeout = timeout or float(os.getenv("JARVIS_MIC_TIMEOUT", "8"))
+
                 while True:
                     # Check for global interruption
                     if interrupt_event and interrupt_event.is_set():
                         return ""
+                    if not is_speaking and (time.perf_counter() - t_listen_start > max_silence_timeout):
+                        log.debug(f"Mic listen timeout reached ({max_silence_timeout}s without speech).")
+                        break
                         
                     data_44100 = stream.read(1411, exception_on_overflow=False)
                     
@@ -428,17 +442,63 @@ class VoiceInterface:
             
         return text
 
+    def _speak_windows_sapi(self, text: str) -> bool:
+        """
+        Fast, zero-dependency Windows SAPI5 (pyttsx3 / PowerShell System.Speech) fallback.
+        Ensures JARVIS always speaks clearly through PC speakers even if cloud TTS, pydub, or mpv fails.
+        """
+        if not text or not str(text).strip():
+            return False
+        clean_text = re.sub(r"[*_`~#>\[\]\(\)\{\}\\]", "", str(text))
+        clean_text = re.sub(r"\s+", " ", clean_text).strip()
+        clean_text = re.sub(r"\s+([,.:;?!])", r"\1", clean_text)
+        if not clean_text:
+            return False
+        self._last_spoken_text = clean_text
+
+        # 1. Try pyttsx3 (SAPI5 on Windows)
+        try:
+            import pyttsx3
+            engine = pyttsx3.init()
+            rate = int(os.getenv("JARVIS_TTS_RATE", "175"))
+            engine.setProperty("rate", rate)
+            engine.say(clean_text)
+            engine.runAndWait()
+            return True
+        except Exception as e:
+            log.debug(f"pyttsx3 SAPI5 TTS failed: {e}. Trying PowerShell System.Speech fallback...")
+
+        # 2. Try PowerShell SpeechSynthesizer / SAPI.SpVoice COM object
+        try:
+            escaped = clean_text.replace("'", "''").replace('"', '`"')
+            ps_cmd = f"(New-Object -ComObject SAPI.SpVoice).Speak('{escaped}')"
+            subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=12
+            )
+            return True
+        except Exception as e2:
+            log.warning(f"PowerShell SAPI TTS fallback failed: {e2}")
+            return False
+
     def speak(self, text: str, interrupt_event: Optional[threading.Event] = None) -> None:
         """
-        Speaks a string of text directly via TTS.
+        Speaks a string of text directly via TTS with automatic Windows SAPI5 fallback.
         """
         if not text or not text.strip():
             return
+        self._last_spoken_text = text
         if interrupt_event is None:
             class DummyEvent:
                 def is_set(self): return False
             interrupt_event = DummyEvent()
-        self.speak_stream([text], interrupt_event)
+        try:
+            self.speak_stream([text], interrupt_event)
+        except Exception as e:
+            log.warning(f"speak_stream failed ({e}), using Windows SAPI5 fallback")
+            self._speak_windows_sapi(text)
 
     def speak_stream(self, text_generator, interrupt_event: threading.Event):
         """
@@ -581,8 +641,10 @@ class VoiceInterface:
             self._speaking = False
             return
         except Exception as mpv_err:
-            log.error(f"All audio playback pipelines failed: {mpv_err}")
+            log.error(f"All audio playback pipelines failed: {mpv_err}. Attempting Windows SAPI5 fallback.")
             self._broadcast_hardware_fallback("audio_output", f"All audio pipelines failed: {mpv_err}")
+            if hasattr(self, "_last_spoken_text") and self._last_spoken_text:
+                self._speak_windows_sapi(self._last_spoken_text)
 
     def _speak_edge_tts_stream(self, text_generator, interrupt_event):
         """
@@ -595,13 +657,18 @@ class VoiceInterface:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
-        if loop.is_running():
-            future = asyncio.run_coroutine_threadsafe(
-                self._async_speak_edge_tts(text_generator, interrupt_event), loop
-            )
-            future.result()
-        else:
-            loop.run_until_complete(self._async_speak_edge_tts(text_generator, interrupt_event))
+        try:
+            if loop.is_running():
+                future = asyncio.run_coroutine_threadsafe(
+                    self._async_speak_edge_tts(text_generator, interrupt_event), loop
+                )
+                future.result(timeout=20)
+            else:
+                loop.run_until_complete(self._async_speak_edge_tts(text_generator, interrupt_event))
+        except Exception as e:
+            log.warning(f"Edge TTS stream error: {e}. Falling back to Windows SAPI5.")
+            if hasattr(self, "_last_spoken_text") and self._last_spoken_text:
+                self._speak_windows_sapi(self._last_spoken_text)
 
     async def _async_speak_edge_tts(self, text_generator, interrupt_event):
         voice = "en-US-AriaNeural"
@@ -639,7 +706,9 @@ class VoiceInterface:
                 await self._play_sentence_audio(buffer.strip(), voice, interrupt_event)
 
         except Exception as e:
-            error_log.error(f"[🎙️ Voice TTS Stream Error]: {e}")
+            error_log.error(f"[🎙️ Voice TTS Stream Error]: {e}. Falling back to Windows SAPI5.")
+            if buffer.strip():
+                self._speak_windows_sapi(buffer.strip())
 
     async def _play_sentence_audio(self, sentence: str, voice: str, interrupt_event):
         if not sentence:
@@ -656,7 +725,8 @@ class VoiceInterface:
                 if chunk["type"] == "audio":
                     audio_data.extend(chunk["data"])
         except Exception as e:
-            error_log.error(f"[🎙️ Voice TTS Chunk Error]: {e}")
+            error_log.error(f"[🎙️ Voice TTS Chunk Error]: {e}. Falling back to Windows SAPI5.")
+            self._speak_windows_sapi(sentence)
             return
             
         if audio_data and not interrupt_event.is_set():
