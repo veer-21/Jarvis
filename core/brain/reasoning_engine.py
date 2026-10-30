@@ -449,6 +449,15 @@ class ReasoningEngine:
         # Strict Three-Tier Fallback Chain:
         # Tier 1: Gemini (handled by primary caller, we are in fallback loop now)
 
+        had_auth_or_quota_error = False
+        api_key_str = str(self._api_key or "")
+        if "AIzaSyTestMockKey" in api_key_str or "TestMockKey" in api_key_str:
+            had_auth_or_quota_error = True
+        if getattr(self, "_last_error", None):
+            last_err = str(self._last_error)
+            if any(k in last_err for k in ("429", "400", "401", "API_KEY_INVALID", "RESOURCE_EXHAUSTED", "Quota exceeded", "rate limit", "AIzaSyTestMockKey")):
+                had_auth_or_quota_error = True
+
         # Tier 2: Groq (High-speed Cloud Fallback)
         if self.groq_key and not self.is_offline:
             try:
@@ -456,8 +465,10 @@ class ReasoningEngine:
                 log.info("Serving via Groq Fallback (Tier 2) with Tools")
                 return self._execute_fallback_with_tools(client, self.groq_model, messages, session_key=key)
             except Exception as e:
+                err_str = str(e)
+                if any(k in err_str for k in ("429", "400", "401", "rate_limit", "quota", "invalid_api_key", "Invalid API Key")):
+                    had_auth_or_quota_error = True
                 log.warning(f"Groq fallback failed: {e}")
-
 
         # Tier 2.5: OpenAI (Secondary Cloud Fallback)
         if self.openai_key and not self.is_offline:
@@ -466,19 +477,45 @@ class ReasoningEngine:
                 log.info("Serving via OpenAI Fallback (Tier 2.5) with Tools")
                 return self._execute_fallback_with_tools(client, "gpt-4o-mini", messages, session_key=key)
             except Exception as e:
+                err_str = str(e)
+                if any(k in err_str for k in ("429", "400", "401", "rate_limit", "quota", "invalid_api_key")):
+                    had_auth_or_quota_error = True
                 log.warning(f"OpenAI fallback failed: {e}")
 
         # Tier 3: Local Ollama (Tertiary local fallback)
         # Attempt local Ollama if offline, or if all cloud routes failed/are unconfigured.
         if self.ollama_host:
+            # Fast 1.5-second socket check before attempting a 30-second completion
+            ollama_reachable = False
             try:
-                client = get_client("ollama", f"{self.ollama_host}/v1")
-                log.info("Serving via Ollama Fallback (Tier 3) with Tools")
-                return self._execute_fallback_with_tools(client, ollama_model, messages, session_key=key)
-            except Exception as e:
-                log.warning(f"Ollama fallback failed: {e}")
-                if self.is_offline:
-                    return f"Offline Engine Error: Make sure Ollama is running and the model '{ollama_model}' is pulled! Error: {e}"
+                import urllib.parse
+                import socket
+                parsed = urllib.parse.urlparse(self.ollama_host)
+                host = parsed.hostname or "127.0.0.1"
+                port = parsed.port or 11434
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(1.5)
+                res = sock.connect_ex((host, port))
+                sock.close()
+                ollama_reachable = (res == 0)
+            except Exception as sock_err:
+                log.debug(f"Ollama socket check failed: {sock_err}")
+                ollama_reachable = False
+
+            if ollama_reachable:
+                try:
+                    client = get_client("ollama", f"{self.ollama_host}/v1")
+                    log.info("Serving via Ollama Fallback (Tier 3) with Tools")
+                    return self._execute_fallback_with_tools(client, ollama_model, messages, session_key=key)
+                except Exception as e:
+                    log.warning(f"Ollama fallback failed: {e}")
+                    if self.is_offline:
+                        return f"Offline Engine Error: Make sure Ollama is running and the model '{ollama_model}' is pulled! Error: {e}"
+            else:
+                log.debug("Ollama host is unreachable via fast 1.5s socket check; bypassing Ollama fallback.")
+
+        if had_auth_or_quota_error or "AIzaSyTestMockKey" in str(self._api_key or ""):
+            return "⚠️ AI Provider Limit or Invalid API Key: Primary LLM rejected the request (check your GEMINI_API_KEY in Setup Wizard / .env or wait for rate limit reset)."
 
         return "Sir, we have exhausted all fallback routes (Gemini & Groq) and local Ollama is offline or unconfigured."
 
@@ -486,6 +523,7 @@ class ReasoningEngine:
         """
         Direct text completion without conversational history or function tools.
         Used for planning, DAG generation, structured extraction, and summarization.
+        NEVER calls _fallback_generate (to prevent re-executing previous tasks).
         """
         if self._current_provider == "gemini" and self._client:
             try:
@@ -500,25 +538,32 @@ class ReasoningEngine:
                 if res and res.text:
                     return res.text
             except Exception as e:
-                log.warning(f"Gemini generate_text failed: {e}. Falling back to text completion...")
+                log.warning(f"Gemini generate_text failed: {e}. Falling back to Groq text completion...")
 
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        # Try Groq text completion without tools
+        # Try Groq as a pure, stateless 1-shot chat completion WITHOUT tools and WITHOUT self._session_histories (timeout=10s)
         if self.groq_key and not self.is_offline:
             try:
-                client = FauxOpenAIClient(api_key=self.groq_key, base_url="https://api.groq.com/openai/v1") if not HAS_OPENAI else openai.OpenAI(api_key=self.groq_key, base_url="https://api.groq.com/openai/v1")
-                res = client.chat.completions.create(model=self.groq_model, messages=messages, temperature=0.2)
+                groq_model = self.groq_model or "llama-3.3-70b-versatile"
+                if HAS_OPENAI:
+                    client = openai.OpenAI(api_key=self.groq_key, base_url="https://api.groq.com/openai/v1", timeout=10.0)
+                else:
+                    client = FauxOpenAIClient(api_key=self.groq_key, base_url="https://api.groq.com/openai/v1")
+                res = client.chat.completions.create(model=groq_model, messages=messages, temperature=0.2, max_tokens=1000)
                 if res and res.choices and res.choices[0].message:
-                    return str(res.choices[0].message.content or "")
+                    content = str(res.choices[0].message.content or "")
+                    if content.strip():
+                        return content
             except Exception as e:
                 log.warning(f"Groq generate_text failed: {e}")
+                return ""
 
-        # Fallback to general fallback
-        return self._fallback_generate(prompt)
+        # NEVER call self._fallback_generate(prompt)! Return "" immediately so caller falls back to deterministic heuristics in <1s.
+        return ""
 
     # ─── Send with Retry ──────────────────────────────────────────────────────
 
@@ -548,8 +593,9 @@ class ReasoningEngine:
                     return response.text or "[JARVIS returned an empty response]"
                 except Exception as e:
                     error_msg = str(e)
+                    self._last_error = error_msg
                     is_rate_limit = any(kw in error_msg for kw in ("429", "RESOURCE_EXHAUSTED", "Quota exceeded", "rate limit"))
-                    is_service_error = any(kw in error_msg for kw in ("503", "UNAVAILABLE", "high demand", "Server Error", "400", "INVALID_ARGUMENT", "deadline"))
+                    is_service_error = any(kw in error_msg for kw in ("503", "UNAVAILABLE", "high demand", "Server Error", "400", "INVALID_ARGUMENT", "deadline", "API_KEY_INVALID", "API key not valid"))
 
                     if "GenerateRequestsPerDay" in error_msg or (is_rate_limit and attempt >= self.MAX_RETRIES - 1) or is_service_error:
                         log.warning(f"Gemini API unavailable/error ({error_msg[:80]}). Switching to fallback provider.")

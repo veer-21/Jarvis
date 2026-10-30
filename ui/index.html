@@ -1005,6 +1005,7 @@
       <div class="voice-controls">
         <button class="voice-btn" id="voice-toggle" onclick="toggleVoice()">🎙 VOICE OFF</button>
         <button class="voice-btn" onclick="testTTS()">🔊 TTS TEST</button>
+        <button class="voice-btn" onclick="resetJarvisState()" title="1-Click Unstick and Reset State">🔄 RESET</button>
       </div>
       <div style="margin-top: 8px; display: flex; gap: 8px;">
         <select id="voice-engine" onchange="updateVoiceSettings()" style="flex:1; background:var(--bg-glass); color:var(--text-dim); border:1px solid var(--border); padding:4px; font-family:var(--font-hud); font-size:0.6rem; border-radius: var(--radius-sm);">
@@ -1375,6 +1376,7 @@
 const API_BASE = 'http://localhost:7799';
 let authToken  = localStorage.getItem('jarvis_token') || '';
 let isListening = false;
+let voiceReplyForNextTurn = false;
 let isSending   = false;
 let taskMode    = false;
 let uptimeStart = Date.now();
@@ -1904,6 +1906,10 @@ async function sendMessage() {
           }
         }
         streamed = true;
+        if (fullText && (isListening || document.getElementById('voice-toggle')?.classList.contains('active') || voiceReplyForNextTurn)) {
+          speakJarvisResponse(fullText);
+          voiceReplyForNextTurn = false;
+        }
       }
     } catch {}
 
@@ -1913,9 +1919,14 @@ async function sendMessage() {
       removeThinking(thinkId);
       addMessage('jarvis', data.response);
       if (data.model) document.getElementById('model-badge').textContent = data.model.toUpperCase();
+      if (data.response && (isListening || document.getElementById('voice-toggle')?.classList.contains('active') || voiceReplyForNextTurn)) {
+        speakJarvisResponse(data.response);
+        voiceReplyForNextTurn = false;
+      }
     }
 
   } catch (e) {
+    voiceReplyForNextTurn = false;
     removeThinking(thinkId);
     if (e.message.includes("401_UNAUTHORIZED") || e.message.includes("Invalid or expired token")) return;
     addMessage('jarvis', `System Error: ${e.message}. Please check that the JARVIS API server is running on port 7799.`);
@@ -2083,20 +2094,149 @@ async function toggleVoice() {
     setSystemStatus(isListening ? 'LISTENING...' : 'SYSTEMS ONLINE', isListening ? 'gold' : 'green');
     showToast(isListening ? 'Voice mode active — speak to JARVIS' : 'Voice mode disabled', 'info');
   } catch (e) {
-    showToast('Voice manager not running (Start backend with --voice)', 'error');
+    showToast('Voice error: ' + e.message, 'error');
   }
 }
-function toggleMic() {
-  const btn = document.getElementById('mic-btn');
-  btn.classList.toggle('listening');
-  showToast('Voice input captured (connect JARVIS backend for full voice)', 'info');
+
+let isMicRecording = false;
+let speechRecInstance = null;
+
+async function speakJarvisResponse(text) {
+  if (!text) return;
+  try {
+    await apiPost('/voice/tts', { text: text });
+  } catch (e) {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(text);
+      window.speechSynthesis.speak(utter);
+    }
+  }
 }
+
+async function fallbackBackendListen() {
+  voiceReplyForNextTurn = true;
+  const btn = document.getElementById('mic-btn');
+  btn.classList.add('listening');
+  isMicRecording = true;
+  setSystemStatus('LISTENING TO MIC...', 'cyan');
+  try {
+    const data = await apiPost('/voice/listen', {});
+    btn.classList.remove('listening');
+    isMicRecording = false;
+    setSystemStatus('SYSTEMS ONLINE', 'green');
+    if (data.success && data.transcript) {
+      addMessage('user', data.transcript);
+      if (data.response) {
+        addMessage('jarvis', data.response);
+        if (isListening || document.getElementById('voice-toggle')?.classList.contains('active') || voiceReplyForNextTurn) {
+          speakJarvisResponse(data.response);
+          voiceReplyForNextTurn = false;
+        }
+      }
+    } else {
+      voiceReplyForNextTurn = false;
+      showToast(data.response || 'No speech detected.', 'warning');
+    }
+  } catch (err) {
+    voiceReplyForNextTurn = false;
+    btn.classList.remove('listening');
+    isMicRecording = false;
+    setSystemStatus('SYSTEMS ONLINE', 'green');
+    showToast('Voice listen error: ' + err.message, 'error');
+  }
+}
+
+async function toggleMic() {
+  const btn = document.getElementById('mic-btn');
+  if (isMicRecording) {
+    if (speechRecInstance) {
+      try { speechRecInstance.stop(); } catch {}
+      speechRecInstance = null;
+    }
+    isMicRecording = false;
+    btn.classList.remove('listening');
+    setSystemStatus('SYSTEMS ONLINE', 'green');
+    return;
+  }
+
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (SpeechRecognition) {
+    try {
+      const rec = new SpeechRecognition();
+      speechRecInstance = rec;
+      rec.lang = 'en-US';
+      rec.interimResults = false;
+      rec.maxAlternatives = 1;
+
+      rec.onstart = () => {
+        isMicRecording = true;
+        btn.classList.add('listening');
+        setSystemStatus('LISTENING...', 'cyan');
+        showToast('Listening... Speak to JARVIS now', 'info');
+      };
+
+      rec.onresult = async (event) => {
+        btn.classList.remove('listening');
+        isMicRecording = false;
+        setSystemStatus('SYSTEMS ONLINE', 'green');
+        const transcript = event.results[0][0].transcript;
+        if (!transcript.trim()) return;
+        document.getElementById('msg-input').value = transcript;
+        voiceReplyForNextTurn = true;
+        sendMessage();
+      };
+
+      rec.onerror = async (err) => {
+        btn.classList.remove('listening');
+        isMicRecording = false;
+        console.warn("Browser SpeechRecognition error, trying backend /voice/listen:", err);
+        await fallbackBackendListen();
+      };
+
+      rec.onend = () => {
+        btn.classList.remove('listening');
+        isMicRecording = false;
+      };
+
+      rec.start();
+      return;
+    } catch (e) {
+      console.warn("Browser SpeechRecognition failed to initialize, using backend:", e);
+    }
+  }
+
+  // Fallback to backend POST /voice/listen directly
+  await fallbackBackendListen();
+}
+
 async function testTTS() {
   showToast('Running TTS test...', 'info');
   try {
     await apiPost('/voice/tts', { text: "All systems are nominal, sir." });
   } catch (e) {
-    showToast('TTS Error: ' + e.message, 'error');
+    if ('speechSynthesis' in window) {
+      const utter = new SpeechSynthesisUtterance("All systems are nominal, sir.");
+      window.speechSynthesis.speak(utter);
+      showToast('Played via browser TTS fallback', 'info');
+    } else {
+      showToast('TTS Error: ' + e.message, 'error');
+    }
+  }
+}
+
+async function resetJarvisState() {
+  showToast('Resetting state...', 'info');
+  try {
+    const res = await apiPost('/tasks/reset-state', {});
+    showToast(res.message || 'State reset successfully.', 'info');
+    setSystemStatus('SYSTEMS ONLINE', 'green');
+    animateViz(false);
+    isSending = false;
+    const sendBtn = document.getElementById('send-btn');
+    if (sendBtn) sendBtn.disabled = false;
+  } catch (e) {
+    showToast('Reset error: ' + e.message, 'error');
   }
 }
 

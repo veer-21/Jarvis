@@ -4,7 +4,7 @@ import {
   Terminal, Activity, BrainCircuit, Lock, Volume2, 
   Sparkles, Clock, Folder, CheckCircle2, XCircle, AlertCircle, 
   ShieldCheck, Sliders, RefreshCw, ChevronRight, Wand2,
-  CheckSquare, Plus, Trash2, ListTodo, Clipboard, Globe
+  CheckSquare, Plus, Trash2, ListTodo, Clipboard, Globe, Mic, VolumeX
 } from 'lucide-react'
 
 // ─── Sub-Components ─────────────────────────────────────────────────────────
@@ -429,6 +429,10 @@ function App() {
   const [reminders, setReminders] = useState([])
   const [todos, setTodos] = useState([])
   const [newTodoText, setNewTodoText] = useState('')
+  const [voiceReplyEnabled, setVoiceReplyEnabled] = useState(() => {
+    return localStorage.getItem('jarvis_voice_reply') !== 'false'
+  })
+  const [isListeningMic, setIsListeningMic] = useState(false)
   const wsRef = useRef(null)
   const chatEndRef = useRef(null)
 
@@ -439,6 +443,77 @@ function App() {
   const toggleUiMode = (newMode) => {
     setUiMode(newMode)
     localStorage.setItem('jarvis_desktop_mode', newMode)
+  }
+
+  const speakText = async (text) => {
+    if (!text || !voiceReplyEnabled) return
+    try {
+      await fetch('http://localhost:7799/voice/tts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ text })
+      })
+    } catch (e) {
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel()
+        const utter = new SpeechSynthesisUtterance(text)
+        window.speechSynthesis.speak(utter)
+      }
+    }
+  }
+
+  const handleVoiceListen = async () => {
+    if (isListeningMic) return
+    setIsListeningMic(true)
+    setStatus('LISTENING')
+    try {
+      const res = await fetch('http://localhost:7799/voice/listen', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      })
+      const data = await res.json()
+      if (data.success && data.transcript) {
+        setMessages(prev => [...prev, { sender: 'YOU', text: data.transcript }])
+        if (data.response) {
+          setMessages(prev => [...prev, { sender: 'JARVIS', text: data.response }])
+          speakText(data.response)
+        }
+        fetchReminders(token)
+        fetchTodos(token)
+      } else {
+        setMessages(prev => [...prev, { sender: 'JARVIS', isSystem: true, text: data.response || 'No speech detected.' }])
+      }
+    } catch (err) {
+      setMessages(prev => [...prev, { sender: 'JARVIS', isSystem: true, text: `Voice listen error: ${err.message}` }])
+    } finally {
+      setIsListeningMic(false)
+      setStatus('ONLINE')
+    }
+  }
+
+  const handleResetState = async () => {
+    try {
+      const res = await fetch('http://localhost:7799/tasks/reset-state', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      })
+      const data = await res.json()
+      setStatus('ONLINE')
+      setMessages(prev => [...prev, { sender: 'JARVIS', isSystem: true, text: data.message || 'System state reset.' }])
+      fetchReminders(token)
+      fetchTodos(token)
+    } catch (err) {
+      alert(`Reset error: ${err.message}`)
+    }
   }
 
   const handleLogin = async (e) => {
@@ -582,6 +657,15 @@ function App() {
             newMsgs.push({ sender: 'JARVIS', text: data.chunk })
           }
           return newMsgs
+        })
+      } else if (data.type === 'stream_done') {
+        setStatus('ONLINE')
+        setMessages(prev => {
+          const lastMsg = prev[prev.length - 1]
+          if (lastMsg && lastMsg.sender === 'JARVIS' && voiceReplyEnabled) {
+            speakText(lastMsg.text)
+          }
+          return prev
         })
       } else if (data.type === 'WAITING_FOR_CONFIRMATION') {
         setPendingConfirmation(data)
@@ -805,6 +889,34 @@ function App() {
           </div>
 
           <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' }}>
+            {/* Voice Reply ON/OFF Toggle */}
+            <button
+              onClick={() => {
+                const nextVal = !voiceReplyEnabled
+                setVoiceReplyEnabled(nextVal)
+                localStorage.setItem('jarvis_voice_reply', String(nextVal))
+              }}
+              className={`px-2.5 py-1 rounded-lg text-[10px] font-medium flex items-center gap-1 border transition-colors mr-1 ${
+                voiceReplyEnabled
+                  ? 'bg-purple-500/20 border-purple-400/40 text-purple-300'
+                  : 'bg-white/5 border-white/5 text-gray-400 hover:text-white'
+              }`}
+              title="Toggle Spoken Voice Replies"
+            >
+              {voiceReplyEnabled ? <Volume2 size={11} className="text-purple-400" /> : <VolumeX size={11} className="text-gray-400" />}
+              {voiceReplyEnabled ? 'Voice Reply ON' : 'Voice Reply OFF'}
+            </button>
+
+            {/* Reset / Unstick Button */}
+            <button
+              onClick={handleResetState}
+              className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-gray-300 text-[10px] font-medium flex items-center gap-1 border border-white/5 transition-colors mr-1"
+              title="Reset brain state, cancel tasks, and unstick UI"
+            >
+              <RefreshCw size={11} className="text-cyan-400" />
+              Reset State
+            </button>
+
             <button
               onClick={() => setShowOnboarding(true)}
               className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-gray-300 text-[10px] font-medium flex items-center gap-1 border border-white/5 transition-colors mr-2"
@@ -996,6 +1108,19 @@ function App() {
             {/* Input Bar */}
             <form onSubmit={sendMessage} className="p-6 pt-3 border-t border-white/5 bg-black/30">
               <div className="relative flex items-center">
+                <button
+                  type="button"
+                  onClick={handleVoiceListen}
+                  disabled={isListeningMic}
+                  className={`p-3 mr-3 rounded-2xl border transition-all flex items-center justify-center shrink-0 ${
+                    isListeningMic || status === 'LISTENING'
+                      ? 'bg-red-500/30 border-red-400 text-red-300 animate-pulse shadow-[0_0_15px_rgba(239,68,68,0.5)]'
+                      : 'bg-white/5 hover:bg-cyan-500/20 border-white/10 text-cyan-300 hover:border-cyan-400/40'
+                  }`}
+                  title="🎙️ Speak to Jarvis"
+                >
+                  <Mic size={18} className={isListeningMic ? "animate-bounce" : ""} />
+                </button>
                 <input 
                   type="text" 
                   value={input} 
@@ -1060,6 +1185,19 @@ function App() {
 
                   <form onSubmit={sendMessage} className="p-6 border-t border-white/10 bg-black/20">
                     <div className="relative flex items-center">
+                      <button
+                        type="button"
+                        onClick={handleVoiceListen}
+                        disabled={isListeningMic}
+                        className={`p-3 mr-3 rounded-2xl border transition-all flex items-center justify-center shrink-0 ${
+                          isListeningMic || status === 'LISTENING'
+                            ? 'bg-red-500/30 border-red-400 text-red-300 animate-pulse'
+                            : 'bg-white/5 hover:bg-cyan-500/20 border-white/10 text-cyan-300'
+                        }`}
+                        title="🎙️ Speak to Jarvis"
+                      >
+                        <Mic size={18} />
+                      </button>
                       <input type="text" value={input} onChange={(e) => setInput(e.target.value)} placeholder="Command JARVIS..." className="w-full bg-black/45 border border-white/10 rounded-2xl py-4 pl-6 pr-16 text-white placeholder-gray-500 focus:outline-none focus:border-cyan-400/50 focus:ring-1 focus:ring-cyan-400/50 transition-all font-light text-sm" />
                       <button type="submit" className="absolute right-4 p-2 rounded-xl bg-white/5 hover:bg-white/10 transition-colors text-cyan-400">
                         <Terminal size={20} />
