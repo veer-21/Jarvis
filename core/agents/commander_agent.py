@@ -28,9 +28,8 @@ class CommanderAgent(BaseAgent):
     ]
 
     _QUERY_KEYWORDS = [
-        "what is", "what's", "who is", "how do", "how to",
-        "why", "when", "where", "explain", "tell me",
-        "weather", "news", "search for",
+        "what", "who", "how", "why", "when", "where", "which",
+        "explain", "tell me", "show me", "weather", "news", "search for",
     ]
 
     def __init__(self, brain=None):
@@ -71,10 +70,30 @@ class CommanderAgent(BaseAgent):
                     res = self._brain.agent_bus.send_message(req)
                     return res if res else AgentResponse(False, "Operator not responding", self.name)
             
-            # If not a hardcoded command, return False to let Brain route it to LLM or Task Engine
+            # If caller only requested intent classification
+            if message.metadata.get("classify_only", False):
+                return AgentResponse(
+                    success=True,
+                    content=intent,
+                    agent=self.name,
+                    metadata={"intent": intent}
+                )
+
+            # Delegate to brain's authoritative orchestrator / processing pipeline
+            if hasattr(self._brain, "process_input"):
+                store_mem = message.metadata.get("store_memory", True)
+                result = self._brain.process_input(user_input, store_memory=store_mem)
+                return AgentResponse(
+                    success=True,
+                    content=str(result),
+                    agent=self.name,
+                    metadata={"intent": intent, "routed_via": "assistant_orchestrator"}
+                )
+
+            # Fallback if brain lacks process_input
             return AgentResponse(
-                success=False,
-                content="Pass to LLM",
+                success=True,
+                content=f"Intent: {intent}",
                 agent=self.name,
                 metadata={"intent": intent},
             )

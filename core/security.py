@@ -367,6 +367,76 @@ class SecurityGuard:
                 return risk
         return RiskLevel.SAFE
 
+    def assess_python_code_risk(self, code: str) -> tuple[RiskLevel, list[str]]:
+        """
+        Evaluate AST-level security risks in Python code before REPL execution.
+        Detects dangerous imports, system tampering, subprocess calls, and filesystem wipes.
+        
+        Returns:
+            (risk_level, list_of_reasons)
+        """
+        import ast
+        reasons = []
+        highest_risk = RiskLevel.SAFE
+
+        try:
+            tree = ast.parse(code)
+        except SyntaxError as e:
+            return RiskLevel.LOW_RISK, [f"Syntax error during pre-execution parse: {e}"]
+
+        CRITICAL_MODULES = {"ctypes", "win32api", "win32process", "nt", "_winapi"}
+        HIGH_RISK_MODULES = {"subprocess", "shutil", "socket", "pty"}
+        MODERATE_MODULES = {"os", "sys", "pathlib"}
+
+        CRITICAL_CALLS = {"system", "rmtree", "kill", "terminate", "popen"}
+        HIGH_RISK_CALLS = {"remove", "unlink", "rmdir", "run", "call", "check_output", "eval", "exec"}
+
+        for node in ast.walk(tree):
+            # Check imports
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    mod_name = alias.name.split('.')[0]
+                    if mod_name in CRITICAL_MODULES:
+                        highest_risk = RiskLevel.CRITICAL
+                        reasons.append(f"Import of critical module '{alias.name}' detected.")
+                    elif mod_name in HIGH_RISK_MODULES:
+                        if highest_risk != RiskLevel.CRITICAL:
+                            highest_risk = RiskLevel.HIGH_RISK
+                        reasons.append(f"Import of high-risk module '{alias.name}' detected.")
+                    elif mod_name in MODERATE_MODULES:
+                        if highest_risk not in (RiskLevel.CRITICAL, RiskLevel.HIGH_RISK):
+                            highest_risk = RiskLevel.MODERATE_RISK
+            elif isinstance(node, ast.ImportFrom):
+                mod_name = (node.module or "").split('.')[0]
+                if mod_name in CRITICAL_MODULES:
+                    highest_risk = RiskLevel.CRITICAL
+                    reasons.append(f"Import from critical module '{node.module}' detected.")
+                elif mod_name in HIGH_RISK_MODULES:
+                    if highest_risk != RiskLevel.CRITICAL:
+                        highest_risk = RiskLevel.HIGH_RISK
+                    reasons.append(f"Import from high-risk module '{node.module}' detected.")
+
+            # Check function calls
+            elif isinstance(node, ast.Call):
+                func_name = ""
+                if isinstance(node.func, ast.Name):
+                    func_name = node.func.id
+                elif isinstance(node.func, ast.Attribute):
+                    func_name = node.func.attr
+
+                if func_name in CRITICAL_CALLS:
+                    highest_risk = RiskLevel.CRITICAL
+                    reasons.append(f"Call to critical operation '{func_name}' detected.")
+                elif func_name in HIGH_RISK_CALLS:
+                    if highest_risk != RiskLevel.CRITICAL:
+                        highest_risk = RiskLevel.HIGH_RISK
+                    reasons.append(f"Call to high-risk operation '{func_name}' detected.")
+
+        if not reasons:
+            reasons.append("Code contains safe arithmetic, logic, or data operations.")
+
+        return highest_risk, reasons
+
     def check_command(self, command: str, interactive: bool = True) -> tuple[bool, str]:
         """
         Gate a shell command through the security policy.
@@ -501,6 +571,30 @@ class SecurityGuard:
             effective_risk = RiskLevel.READ_ONLY
         elif t_low == "compose_and_launch_message":
             effective_risk = RiskLevel.LOW_RISK
+        elif t_low == "repl_execute_python" and "code" in args and isinstance(args["code"], str):
+            code_risk, code_reasons = self.assess_python_code_risk(args["code"])
+            risk_ranks = {
+                RiskLevel.READ_ONLY: 0,
+                RiskLevel.LOW_RISK: 1,
+                RiskLevel.MODERATE_RISK: 2,
+                RiskLevel.HIGH_RISK: 3,
+                RiskLevel.CRITICAL: 4
+            }
+            if risk_ranks.get(code_risk, 0) > risk_ranks.get(effective_risk, 0):
+                effective_risk = code_risk
+        elif t_low == "repl_execute_powershell" and "command" in args and isinstance(args["command"], str):
+            ps_risk = self.assess_command_risk(args["command"])
+            risk_ranks = {
+                RiskLevel.READ_ONLY: 0,
+                RiskLevel.LOW_RISK: 1,
+                RiskLevel.MODERATE_RISK: 2,
+                RiskLevel.HIGH_RISK: 3,
+                RiskLevel.CRITICAL: 4
+            }
+            if risk_ranks.get(ps_risk, 0) > risk_ranks.get(effective_risk, 0):
+                effective_risk = ps_risk
+        elif t_low == "repl_reset_session":
+            effective_risk = RiskLevel.LOW_RISK
 
         requires_confirmation = effective_risk in (RiskLevel.HIGH_RISK, RiskLevel.CRITICAL)
 
@@ -606,3 +700,6 @@ class SecurityGuard:
 encryption   = EncryptionEngine()
 owner_auth   = OwnerAuth()
 guard        = SecurityGuard(owner_auth)
+
+# Backward-compatibility alias
+SecurityLayer = SecurityGuard

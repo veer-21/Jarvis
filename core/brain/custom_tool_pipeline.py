@@ -28,7 +28,8 @@ ALLOWED_MODULES = {
     "itertools",
     "string",
     "random",
-    "typing"
+    "typing",
+    "pydantic",
 }
 
 # Permitted runtime built-ins for pure-computation tools (P0-1)
@@ -39,6 +40,8 @@ ALLOWED_BUILTINS = {
     "isinstance", "issubclass", "iter", "len", "list", "map", "max", "min", "next",
     "oct", "ord", "pow", "range", "repr", "reversed", "round", "set", "slice",
     "sorted", "str", "sum", "tuple", "zip",
+    # Framework and schema types
+    "jarvis_tool", "RiskLevel", "BaseModel", "Field",
     # Standard math/lookup exceptions
     "ArithmeticError", "AssertionError", "AttributeError", "Exception", "FloatingPointError",
     "IndexError", "KeyError", "LookupError", "OverflowError", "RuntimeError",
@@ -363,10 +366,20 @@ def validate_tool_source(source_code: str, filename: str = "<custom_tool>") -> t
                 return False, "Security violation: import without module name is not permitted.", None
             mod_root = node.module.split('.')[0]
             if mod_root not in ALLOWED_MODULES:
-                return False, f"Security violation: module '{node.module}' is not in the allowed import list ({sorted(ALLOWED_MODULES)}).", None
-            for alias in node.names:
-                if alias.name in FORBIDDEN_NAMES or alias.name in FORBIDDEN_FORMATTER_APIS or alias.name.startswith("__"):
-                    return False, f"Security violation: forbidden import of '{alias.name}' detected.", None
+                if node.module == "core.brain.tool_router":
+                    for alias in node.names:
+                        if alias.name not in ("jarvis_tool", "ToolSchema"):
+                            return False, f"Security violation: forbidden import '{alias.name}' from '{node.module}'.", None
+                elif node.module == "core.security":
+                    for alias in node.names:
+                        if alias.name not in ("RiskLevel",):
+                            return False, f"Security violation: forbidden import '{alias.name}' from '{node.module}'.", None
+                else:
+                    return False, f"Security violation: module '{node.module}' is not in the allowed import list ({sorted(ALLOWED_MODULES)}).", None
+            else:
+                for alias in node.names:
+                    if alias.name in FORBIDDEN_NAMES or alias.name in FORBIDDEN_FORMATTER_APIS or alias.name.startswith("__"):
+                        return False, f"Security violation: forbidden import of '{alias.name}' detected.", None
 
         # 3. Forbidden Function Calls (ast.Call)
         elif isinstance(node, ast.Call):
@@ -459,6 +472,114 @@ def validate_tool_source(source_code: str, filename: str = "<custom_tool>") -> t
     return True, None, metadata
 
 
+def validate_ast_safety(source_code: str, filename: str = "<custom_tool>") -> tuple[bool, Optional[str], Optional[dict]]:
+    """
+    AST Security Audit for synthesized tools.
+    Verifies that the code contains no forbidden calls, unauthorized imports, or reflection exploits.
+    """
+    return validate_tool_source(source_code, filename=filename)
+
+
+def dry_run_synthetic_execution(
+    source_code: str,
+    function_name: Optional[str] = None,
+    synthetic_args: Optional[dict[str, Any]] = None,
+    timeout_seconds: float = 5.0,
+) -> tuple[bool, str, Any]:
+    """
+    Dry-run synthetic test execution of custom tool code inside an isolated namespace.
+    Compiles code, instantiates callable, and tests execution with synthetic parameters.
+    """
+    # 1. Pre-execution AST safety check
+    is_valid, reason, meta = validate_ast_safety(source_code, filename="<dry_run>")
+    if not is_valid:
+        return False, f"AST safety check failed: {reason}", None
+
+    fn_name = function_name or (meta.get("function_name") if meta else None)
+    if not fn_name:
+        match = re.search(r"def\s+([a-zA-Z0-9_]+)\s*\(", source_code)
+        fn_name = match.group(1) if match else None
+
+    if not fn_name:
+        return False, "Could not determine target function name for dry-run.", None
+
+    # 2. Compile
+    try:
+        code_obj = compile(source_code, "<dry_run>", "exec")
+    except Exception as comp_err:
+        return False, f"Dry-run compilation error: {comp_err}", None
+
+    # 3. Prepare isolated namespace
+    import math, datetime, re, json, collections, itertools, string, random, typing
+    from core.brain.tool_router import jarvis_tool, ToolSchema
+    from core.security import RiskLevel
+
+    builtins_dict = {b: __builtins__[b] for b in ALLOWED_BUILTINS if isinstance(__builtins__, dict) and b in __builtins__} if isinstance(__builtins__, dict) else {b: getattr(__builtins__, b) for b in ALLOWED_BUILTINS if hasattr(__builtins__, b)}
+    builtins_dict["__import__"] = __import__
+
+    safe_ns: dict[str, Any] = {
+        "__builtins__": builtins_dict,
+        "math": math,
+        "datetime": datetime,
+        "re": re,
+        "json": json,
+        "collections": collections,
+        "itertools": itertools,
+        "string": string,
+        "random": random,
+        "typing": typing,
+        "jarvis_tool": jarvis_tool,
+        "ToolSchema": ToolSchema,
+        "RiskLevel": RiskLevel,
+    }
+    try:
+        import pydantic
+        safe_ns["pydantic"] = pydantic
+        safe_ns["BaseModel"] = pydantic.BaseModel
+        safe_ns["Field"] = pydantic.Field
+    except ImportError:
+        pass
+
+    try:
+        exec(code_obj, safe_ns)
+    except Exception as exec_err:
+        return False, f"Dry-run module execution failed: {exec_err}", None
+
+    fn = safe_ns.get(fn_name)
+    if not fn or not callable(fn):
+        return False, f"Callable function '{fn_name}' not found after execution.", None
+
+    # 4. Generate synthetic arguments and execute
+    try:
+        sig = inspect.signature(fn)
+        call_args = {}
+        for p_name, param in sig.parameters.items():
+            if param.default != inspect.Parameter.empty:
+                continue
+            ann = param.annotation
+            if ann in (int, "int"):
+                call_args[p_name] = 1
+            elif ann in (float, "float"):
+                call_args[p_name] = 1.0
+            elif ann in (bool, "bool"):
+                call_args[p_name] = True
+            elif ann in (list, "list"):
+                call_args[p_name] = []
+            elif ann in (dict, "dict"):
+                call_args[p_name] = {}
+            elif ann in (str, "str"):
+                call_args[p_name] = "sample"
+            else:
+                call_args[p_name] = 1
+        if synthetic_args:
+            call_args.update(synthetic_args)
+
+        result = fn(**call_args)
+        return True, "Dry-run execution succeeded.", result
+    except Exception as run_err:
+        return False, f"Dry-run invocation failed: {type(run_err).__name__}: {run_err}", None
+
+
 DEFAULT_CUSTOM_DIR = Path(__file__).parent.parent.parent / "tools" / "custom"
 DEFAULT_QUARANTINE_DIR = Path(__file__).parent.parent.parent / "tools" / "custom" / "quarantine"
 
@@ -470,8 +591,8 @@ def process_and_register_generated_tool(
     quarantine_dir: Path = DEFAULT_QUARANTINE_DIR
 ) -> tuple[bool, str]:
     """
-    Executes the full quarantine, validation, and registration pipeline for generated tools:
-    GENERATE → WRITE TO QUARANTINE → AST/SYNTAX VALIDATION → COMPILE → STATIC SAFETY CHECKS → TOOL CONTRACT VALIDATION → ONLY THEN REGISTER.
+    Executes the full quarantine, validation, dry-run, and registration pipeline for generated tools:
+    GENERATE → WRITE TO QUARANTINE → AST/SYNTAX VALIDATION → COMPILE → STATIC SAFETY CHECKS → DRY-RUN → ONLY THEN REGISTER.
     """
     custom_dir.mkdir(parents=True, exist_ok=True)
     quarantine_dir.mkdir(parents=True, exist_ok=True)
@@ -485,11 +606,10 @@ def process_and_register_generated_tool(
     with open(quarantine_file, "w", encoding="utf-8") as f:
         f.write(source_code)
 
-    # 2-4. Run Multi-Stage Validation
-    is_valid, reason, metadata = validate_tool_source(source_code, filename=str(quarantine_file))
+    # 2-4. Run Multi-Stage AST Validation
+    is_valid, reason, metadata = validate_ast_safety(source_code, filename=str(quarantine_file))
     if not is_valid:
         error_log.error(f"[CustomToolPipeline] Tool '{func_name}' rejected during quarantine validation: {reason}")
-        # Save rejection diagnostic
         rejection_meta = {
             "function_name": func_name,
             "rejected_at": datetime.now(timezone.utc).isoformat(),
@@ -502,7 +622,23 @@ def process_and_register_generated_tool(
 
         return False, f"Quarantined: {reason}"
 
-    # 5. Promoted from Quarantine to Registered Custom Directory
+    # Stage 5: Dry-Run Synthetic Test Execution
+    dry_ok, dry_msg, _ = dry_run_synthetic_execution(source_code, function_name=func_name)
+    if not dry_ok:
+        error_log.error(f"[CustomToolPipeline] Tool '{func_name}' rejected during synthetic dry-run: {dry_msg}")
+        rejection_meta = {
+            "function_name": func_name,
+            "rejected_at": datetime.now(timezone.utc).isoformat(),
+            "reason": f"Synthetic dry-run failed: {dry_msg}",
+            "file": quarantine_file.name
+        }
+        meta_path = quarantine_dir / f"quarantine_{timestamp}_{func_name}.rejection.json"
+        with open(meta_path, "w", encoding="utf-8") as mf:
+            json.dump(rejection_meta, mf, indent=2)
+
+        return False, f"Quarantined: Synthetic dry-run failed: {dry_msg}"
+
+    # 6. Promoted from Quarantine to Registered Custom Directory
     target_file = custom_dir / f"{func_name}.py"
     with open(target_file, "w", encoding="utf-8") as tf:
         tf.write(source_code)
@@ -513,7 +649,7 @@ def process_and_register_generated_tool(
     except Exception:
         pass
 
-    # 6. Dynamically load into live ToolRouter
+    # 7. Dynamically load and hot-reload into live ToolRouter
     loaded = tool_router.load_custom_tools(str(custom_dir))
     log.info(f"[CustomToolPipeline] Successfully validated and promoted '{func_name}.py' to live ToolRouter.")
     return True, f"Successfully validated and registered '{func_name}' ({loaded} custom tools online)."

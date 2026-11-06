@@ -132,9 +132,13 @@ class VisionScreenUnderstanding(ScreenUnderstanding):
         keywords = expected_state.lower().split()
         # If at least 60% of keywords appear in visible text, state is confirmed
         matches = [kw for kw in keywords if kw in visible_text]
-        if keywords and (len(matches) / len(keywords)) >= 0.6:
-            log.info(f"[Vision] State verification passed: {matches} found for '{expected_state}'")
-            return True
+        if keywords:
+            if (len(matches) / len(keywords)) >= 0.6:
+                log.info(f"[Vision] State verification passed: {matches} found for '{expected_state}'")
+                return True
+            else:
+                log.warning(f"[Vision] State verification failed: only {len(matches)}/{len(keywords)} keywords found for '{expected_state}'")
+                return False
 
-        log.info(f"[Vision] State heuristic check completed for '{expected_state}'")
+        log.info(f"[Vision] State heuristic check completed for empty expected state.")
         return True

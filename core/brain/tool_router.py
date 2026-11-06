@@ -33,6 +33,80 @@ class ToolSchema:
     reversible:           bool = False
     parameters:           dict = field(default_factory=dict)
     pydantic_model:       Any = None
+    requires_binaries:    list[str] = field(default_factory=list)
+
+
+def jarvis_tool(
+    name: Optional[str] = None,
+    category: str = "general",
+    risk_level: Optional[RiskLevel] = None,
+    risk: Optional[RiskLevel] = None,
+    requires_binaries: Optional[list[str]] = None,
+    requires: Optional[list[str]] = None,
+    requires_confirmation: Optional[bool] = None,
+    timeout_seconds: int = 30,
+    description: Optional[str] = None,
+    retry_allowed: bool = True,
+    retry_policy: RetryPolicy = RetryPolicy.RETRY_ONCE,
+    reversible: bool = False,
+    parameters: Optional[dict] = None,
+    pydantic_model: Any = None,
+):
+    """
+    Declarative tool registration decorator (@jarvis_tool).
+    Attaches structured ToolSchema metadata to callable functions,
+    enabling seamless discovery and declarative registration in ToolRouter.
+    """
+    effective_risk = risk_level or risk or RiskLevel.SAFE
+    effective_binaries = requires_binaries or requires or []
+
+    if requires_confirmation is None:
+        needs_confirm = effective_risk in (RiskLevel.HIGH, RiskLevel.CRITICAL)
+    else:
+        needs_confirm = requires_confirmation
+
+    def decorator(func: Callable) -> Callable:
+        tool_name = name or getattr(func, "__name__", "custom_tool")
+        tool_desc = description or (func.__doc__ or "").strip().split("\n")[0]
+
+        # Generate Pydantic Model dynamically if not provided
+        model = pydantic_model
+        if model is None:
+            import inspect
+            from pydantic import create_model
+            fields = {}
+            try:
+                sig = inspect.signature(func)
+                for p_name, param in sig.parameters.items():
+                    p_type = param.annotation if param.annotation != inspect.Parameter.empty else Any
+                    d_val = param.default if param.default != inspect.Parameter.empty else ...
+                    fields[p_name] = (p_type, d_val)
+                model = create_model(f"{tool_name}Model", **fields)
+            except Exception as e:
+                log.debug(f"Pydantic model generation deferred for {tool_name}: {e}")
+
+        schema = ToolSchema(
+            name=tool_name,
+            description=tool_desc,
+            callable=func,
+            category=category,
+            risk_level=effective_risk,
+            requires_confirmation=needs_confirm,
+            confirmation_policy=ConfirmationPolicy.ALWAYS if needs_confirm else ConfirmationPolicy.NEVER,
+            timeout_seconds=timeout_seconds,
+            retry_allowed=retry_allowed,
+            retry_policy=retry_policy,
+            reversible=reversible,
+            parameters=parameters or {},
+            pydantic_model=model,
+            requires_binaries=effective_binaries,
+        )
+
+        func.__jarvis_tool__ = True
+        func.__jarvis_tool_schema__ = schema
+        return func
+
+    return decorator
 
 
 class ToolRouter:
@@ -55,9 +129,9 @@ class ToolRouter:
         if not schema:
             return False
         cat = getattr(schema, "category", "").lower()
-        if cat in ("browser", "desktop", "automation"):
+        if cat in ("browser", "desktop", "automation", "uia", "com", "repl", "ghost"):
             return True
-        return any(k in name.lower() for k in ("browser", "window", "mouse", "keyboard", "screenshot", "screen"))
+        return any(k in name.lower() for k in ("browser", "window", "mouse", "keyboard", "screenshot", "screen", "uia_", "com_", "repl_", "ghost_"))
 
     # ─── Registration ─────────────────────────────────────────────────────────
 
@@ -77,6 +151,45 @@ class ToolRouter:
     def register_contract(self, contract: Any) -> None:
         """Register a ToolContract canonical declaration."""
         self.register(contract)
+
+    def register_decorated_tool(self, func: Callable) -> Optional[ToolSchema]:
+        """
+        Register a single callable decorated with @jarvis_tool.
+        If not decorated, falls back to register_callable.
+        """
+        schema = getattr(func, "__jarvis_tool_schema__", None)
+        if schema and isinstance(schema, ToolSchema):
+            self.register(schema)
+            return schema
+        self.register_callable(func)
+        return self.get_tool(getattr(func, "__name__", ""))
+
+    def register_decorated_tools(self, target: Any) -> int:
+        """
+        Scan a module, dictionary, class, or iterable of callables for @jarvis_tool decorations
+        and register each discovered tool.
+
+        Returns:
+            Number of decorated tools registered.
+        """
+        count = 0
+        if isinstance(target, dict):
+            items = list(target.values())
+        elif hasattr(target, "__iter__") and not isinstance(target, (str, bytes)):
+            items = list(target)
+        else:
+            # Module or object inspection
+            items = [getattr(target, attr_name) for attr_name in dir(target) if not attr_name.startswith("_")]
+
+        for item in items:
+            if callable(item) and hasattr(item, "__jarvis_tool_schema__"):
+                schema = getattr(item, "__jarvis_tool_schema__")
+                if isinstance(schema, ToolSchema):
+                    self.register(schema)
+                    count += 1
+
+        log.info(f"Registered {count} decorated tools in ToolRouter.")
+        return count
 
     def register_callable(
         self,
@@ -209,12 +322,17 @@ class ToolRouter:
                 try:
                     module = importlib.util.module_from_spec(spec)
                     spec.loader.exec_module(module)
-                    # Custom tools default to HIGH risk since they are auto-generated
-                    overrides = {}
-                    for attr_name in dir(module):
-                        if not attr_name.startswith("_"):
-                            overrides[attr_name] = RiskLevel.HIGH
-                    count += self.register_tools_from_module(module, category="custom", risk_overrides=overrides)
+                    # Check for @jarvis_tool decorated tools first
+                    dec_count = self.register_decorated_tools(module)
+                    if dec_count > 0:
+                        count += dec_count
+                    else:
+                        # Fallback for plain undecorated functions
+                        overrides = {}
+                        for attr_name in dir(module):
+                            if not attr_name.startswith("_"):
+                                overrides[attr_name] = RiskLevel.HIGH
+                        count += self.register_tools_from_module(module, category="custom", risk_overrides=overrides)
                 except Exception as e:
                     error_log.error(f"Failed to load validated custom tool {py_file.name}: {e}")
                     

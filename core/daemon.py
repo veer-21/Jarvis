@@ -20,12 +20,19 @@ class ProactiveDaemon:
         notify_fn: Optional[Callable[[str], None]] = None,
         health_interval_seconds: int = 180,    # Check system vitals every 3 mins
         briefing_interval_seconds: int = 3600, # Check briefing status every hour
+        sentinel_interval_seconds: int = 30,   # Check hardware and ambient triggers every 30s
     ):
         self.notify_fn = notify_fn
         self.health_interval = health_interval_seconds
         self.briefing_interval = briefing_interval_seconds
+        self.sentinel_interval = sentinel_interval_seconds
         self._running = False
         self._thread: Optional[threading.Thread] = None
+
+        # Phase 3 Hardware & Ambient Sentinel Engines
+        from core.sentinel import hardware_sentinel, ambient_sentinel
+        self.hardware_sentinel = hardware_sentinel
+        self.ambient_sentinel = ambient_sentinel
 
         # Thresholds
         self.cpu_threshold = 90.0
@@ -83,6 +90,7 @@ class ProactiveDaemon:
         """Main background loop."""
         last_health_check = 0.0
         last_briefing_check = 0.0
+        last_sentinel_check = 0.0
 
         while self._running:
             now = time.time()
@@ -106,7 +114,43 @@ class ProactiveDaemon:
                     error_log.error(f"[ProactiveDaemon] Briefing check error: {e}")
                 last_briefing_check = now
 
+            # 4. Phase 3: Hardware & Ambient Sentinel Check
+            if now - last_sentinel_check >= self.sentinel_interval:
+                try:
+                    self._check_sentinel()
+                except Exception as e:
+                    error_log.error(f"[ProactiveDaemon] Sentinel check error: {e}")
+                last_sentinel_check = now
+
             time.sleep(2.0)
+
+    def _check_sentinel(self) -> None:
+        """Inspect hardware power state and trigger ambient proactive triggers."""
+        metrics = self.hardware_sentinel.inspect_hardware()
+        now = time.time()
+        cooldown = 1800  # 30 min cooldown for low battery alert
+
+        # Low battery alert
+        if metrics.power_plugged is False and metrics.battery_percent is not None:
+            if metrics.battery_percent < 20.0:
+                if now - self._last_alert_time.get("battery_low", 0) > cooldown:
+                    self._alert(f"⚠️ Battery is low ({metrics.battery_percent:.0f}%). Switching JARVIS to Power Saver mode.")
+                    self._last_alert_time["battery_low"] = now
+
+        # Run ambient scan (folder declutter & clipboard intelligence)
+        self.ambient_sentinel.run_ambient_scan()
+
+    def get_hardware_status(self) -> dict:
+        """Return real-time hardware status metrics."""
+        return self.hardware_sentinel.inspect_hardware().model_dump()
+
+    def get_power_profile(self) -> str:
+        """Return active power profile string."""
+        return self.hardware_sentinel.get_last_metrics().power_profile.value
+
+    def trigger_ambient_scan(self, folder_path: Optional[str] = None) -> list:
+        """Manually trigger an ambient proactive scan and return generated suggestions."""
+        return [s.model_dump() for s in self.ambient_sentinel.run_ambient_scan(target_folder=folder_path)]
 
     def _check_scheduled_jobs(self, current_time: float) -> None:
         """Execute any jobs whose time has arrived."""
