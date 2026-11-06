@@ -54,6 +54,24 @@ from tools.everyday_tools  import (
     compose_and_launch_message
 )
 from tools.context_tools import get_active_window_context
+from tools.uia_tools import (
+    uia_list_windows, uia_inspect_window, uia_click_element,
+    uia_set_text, uia_get_text
+)
+from tools.com_tools import (
+    com_get_running_apps, com_excel_read, com_excel_write,
+    com_word_create
+)
+from tools.repl_tools import (
+    repl_execute_python, repl_execute_powershell, repl_reset_session
+)
+from core.sentinel import (
+    sentinel_get_hardware_status, sentinel_run_ambient_scan, sentinel_set_power_profile
+)
+from tools.ghost_operator import (
+    ghost_list_targetable_windows, ghost_click_window, ghost_send_text
+)
+from core.agents.refiner_agent import refiner_synthesize_custom_tool
 
 from core.security import RiskLevel
 
@@ -195,6 +213,56 @@ class Brain:
                                      risk_level=RiskLevel.READ_ONLY, requires_confirmation=False)
         self.tools.register_callable(compose_and_launch_message, category="everyday",
                                      risk_level=RiskLevel.LOW_RISK, requires_confirmation=False)
+
+        # ── Phase 1: Windows UI Automation (UIA) Tools ──
+        self.tools.register_callable(uia_list_windows, category="uia",
+                                     risk_level=RiskLevel.READ_ONLY, requires_confirmation=False)
+        self.tools.register_callable(uia_inspect_window, category="uia",
+                                     risk_level=RiskLevel.READ_ONLY, requires_confirmation=False)
+        self.tools.register_callable(uia_get_text, category="uia",
+                                     risk_level=RiskLevel.READ_ONLY, requires_confirmation=False)
+        self.tools.register_callable(uia_click_element, category="uia",
+                                     risk_level=RiskLevel.LOW_RISK, requires_confirmation=False)
+        self.tools.register_callable(uia_set_text, category="uia",
+                                     risk_level=RiskLevel.LOW_RISK, requires_confirmation=False)
+
+        # ── Phase 1: Native COM Automation Tools ──
+        self.tools.register_callable(com_get_running_apps, category="com",
+                                     risk_level=RiskLevel.READ_ONLY, requires_confirmation=False)
+        self.tools.register_callable(com_excel_read, category="com",
+                                     risk_level=RiskLevel.READ_ONLY, requires_confirmation=False)
+        self.tools.register_callable(com_excel_write, category="com",
+                                     risk_level=RiskLevel.MODERATE_RISK, requires_confirmation=False)
+        self.tools.register_callable(com_word_create, category="com",
+                                     risk_level=RiskLevel.MODERATE_RISK, requires_confirmation=False)
+
+        # ── Phase 2: Sandboxed Streaming Code REPL Tools ──
+        self.tools.register_callable(repl_execute_python, category="repl",
+                                     risk_level=RiskLevel.MODERATE_RISK, requires_confirmation=False)
+        self.tools.register_callable(repl_execute_powershell, category="repl",
+                                     risk_level=RiskLevel.MODERATE_RISK, requires_confirmation=False)
+        self.tools.register_callable(repl_reset_session, category="repl",
+                                     risk_level=RiskLevel.LOW_RISK, requires_confirmation=False)
+
+        # ── Phase 3: Hardware Sentinel & Ambient Proactive Tools ──
+        self.tools.register_callable(sentinel_get_hardware_status, category="sentinel",
+                                     risk_level=RiskLevel.READ_ONLY, requires_confirmation=False)
+        self.tools.register_callable(sentinel_run_ambient_scan, category="sentinel",
+                                     risk_level=RiskLevel.READ_ONLY, requires_confirmation=False)
+        self.tools.register_callable(sentinel_set_power_profile, category="sentinel",
+                                     risk_level=RiskLevel.LOW_RISK, requires_confirmation=False)
+
+        # ── Phase 4: The Ghost Operator Tools ──
+        self.tools.register_callable(ghost_list_targetable_windows, category="ghost",
+                                     risk_level=RiskLevel.READ_ONLY, requires_confirmation=False)
+        self.tools.register_callable(ghost_click_window, category="ghost",
+                                     risk_level=RiskLevel.LOW_RISK, requires_confirmation=False)
+        self.tools.register_callable(ghost_send_text, category="ghost",
+                                     risk_level=RiskLevel.LOW_RISK, requires_confirmation=False)
+
+        # ── Phase 4: Refiner 2.0 Autonomous Evolution Tools ──
+        self.tools.register_callable(refiner_synthesize_custom_tool, category="refiner",
+                                     risk_level=RiskLevel.HIGH_RISK, requires_confirmation=True)
 
         # Load Auto-Generated Custom Tools
         self.tools.load_custom_tools()

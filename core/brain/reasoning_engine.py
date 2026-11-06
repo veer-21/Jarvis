@@ -144,7 +144,16 @@ class ReasoningEngine:
         else:
             self._current_provider = "gemini" if self._client else "fallback"
 
-        log.info(f"ReasoningEngine initialized (Primary: {self._current_provider}, Model: {self._model_name}, Offline: {self.is_offline})")
+        # Phase 3 Hardware Power Budgeting
+        self._power_profile: str = "NORMAL"
+        try:
+            from core.sentinel import hardware_sentinel
+            hardware_sentinel.register_profile_listener(self.set_power_profile)
+            self._power_profile = hardware_sentinel.get_last_metrics().power_profile.value
+        except Exception:
+            pass
+
+        log.info(f"ReasoningEngine initialized (Primary: {self._current_provider}, Model: {self._model_name}, Offline: {self.is_offline}, Power: {self._power_profile})")
 
     def _make_session_key(self, session_id: Optional[str] = None, user_id: Optional[str] = None) -> str:
         sid = session_id or "default"
@@ -182,6 +191,18 @@ class ReasoningEngine:
     @_conversation_history.setter
     def _conversation_history(self, val: list[dict]):
         self._session_histories["default:default"] = val
+
+    def set_power_profile(self, profile: Any) -> None:
+        """Set the active hardware power profile and adjust token/iteration budgeting."""
+        if hasattr(profile, "value"):
+            self._power_profile = str(profile.value).upper()
+        else:
+            self._power_profile = str(profile).upper()
+        log.info(f"[ReasoningEngine] Power profile updated to: {self._power_profile}")
+
+    def get_power_profile(self) -> str:
+        """Return active power profile."""
+        return self._power_profile
 
     # ─── Chat Session ─────────────────────────────────────────────────────────
 
@@ -278,8 +299,18 @@ class ReasoningEngine:
         import json
         openai_tools = [self._callable_to_openai_schema(f) for f in self._tools] if self._tools else None
         
-        for _ in range(15): # Max iterations
-            kwargs = {"model": model_name, "messages": messages, "temperature": 0.4, "max_tokens": 800}
+        # Phase 3: Adaptive Resource Budgeting based on PowerProfile
+        max_iter = 15
+        default_tokens = 800
+        if self._power_profile == "POWER_SAVER":
+            max_iter = 8
+            default_tokens = 350
+        elif self._power_profile == "CRITICAL_SAVER":
+            max_iter = 5
+            default_tokens = 200
+
+        for _ in range(max_iter): # Adaptive max iterations
+            kwargs = {"model": model_name, "messages": messages, "temperature": 0.4, "max_tokens": default_tokens}
             if openai_tools:
                 kwargs["tools"] = openai_tools
                 
@@ -553,7 +584,12 @@ class ReasoningEngine:
                     client = openai.OpenAI(api_key=self.groq_key, base_url="https://api.groq.com/openai/v1", timeout=10.0)
                 else:
                     client = FauxOpenAIClient(api_key=self.groq_key, base_url="https://api.groq.com/openai/v1")
-                res = client.chat.completions.create(model=groq_model, messages=messages, temperature=0.2, max_tokens=1000)
+                token_budget = 1000
+                if self._power_profile == "POWER_SAVER":
+                    token_budget = 400
+                elif self._power_profile == "CRITICAL_SAVER":
+                    token_budget = 200
+                res = client.chat.completions.create(model=groq_model, messages=messages, temperature=0.2, max_tokens=token_budget)
                 if res and res.choices and res.choices[0].message:
                     content = str(res.choices[0].message.content or "")
                     if content.strip():

@@ -74,6 +74,31 @@ class ResultVerifier:
         "smart_clipboard_assistant":       VerificationLevel.LEVEL_2,
         "read_and_summarize_webpage":      VerificationLevel.LEVEL_2,
         "compose_and_launch_message":      VerificationLevel.LEVEL_2,
+        # Windows UI Automation (UIA) Tools (Phase 1)
+        "uia_list_windows":                VerificationLevel.LEVEL_2,
+        "uia_inspect_window":              VerificationLevel.LEVEL_3,
+        "uia_click_element":               VerificationLevel.LEVEL_3,
+        "uia_set_text":                    VerificationLevel.LEVEL_3,
+        "uia_get_text":                    VerificationLevel.LEVEL_2,
+        # Native COM Automation Tools (Phase 1)
+        "com_get_running_apps":            VerificationLevel.LEVEL_2,
+        "com_excel_read":                  VerificationLevel.LEVEL_2,
+        "com_excel_write":                 VerificationLevel.LEVEL_3,
+        "com_word_create":                 VerificationLevel.LEVEL_3,
+        # Sandboxed Streaming Code REPL Tools (Phase 2)
+        "repl_execute_python":             VerificationLevel.LEVEL_2,
+        "repl_execute_powershell":         VerificationLevel.LEVEL_2,
+        "repl_reset_session":              VerificationLevel.LEVEL_1,
+        # Hardware Sentinel & Ambient Proactive Tools (Phase 3)
+        "sentinel_get_hardware_status":    VerificationLevel.LEVEL_2,
+        "sentinel_run_ambient_scan":       VerificationLevel.LEVEL_2,
+        "sentinel_set_power_profile":      VerificationLevel.LEVEL_1,
+        # Ghost Operator Tools (Phase 4)
+        "ghost_list_targetable_windows":    VerificationLevel.LEVEL_2,
+        "ghost_click_window":               VerificationLevel.LEVEL_3,
+        "ghost_send_text":                  VerificationLevel.LEVEL_3,
+        # Refiner 2.0 Tools (Phase 4)
+        "refiner_synthesize_custom_tool":   VerificationLevel.LEVEL_3,
     }
 
     @classmethod
@@ -310,6 +335,174 @@ class ResultVerifier:
             err = raw_result.get("error", "Message composition failed.") if isinstance(raw_result, dict) else str(raw_result)
             return VerificationResult(verified=False, level=VerificationLevel.LEVEL_1, error=err, details=err)
 
+        # ── 10. Windows UI Automation (UIA) Verification (Phase 1) ──
+        if t_name in ("uia_list_windows", "uia_inspect_window", "uia_click_element", "uia_set_text", "uia_get_text"):
+            if isinstance(raw_result, dict) and raw_result.get("success"):
+                lvl = ResultVerifier.TOOL_LEVEL_REGISTRY.get(t_name, VerificationLevel.LEVEL_2)
+                return VerificationResult(
+                    verified=True,
+                    level=lvl,
+                    evidence={"action": raw_result.get("action", t_name), "target": raw_result.get("target")},
+                    details=f"UIA action '{t_name}' verified successfully."
+                )
+            err = raw_result.get("error", f"UIA operation '{t_name}' failed.") if isinstance(raw_result, dict) else str(raw_result)
+            return VerificationResult(verified=False, level=VerificationLevel.LEVEL_1, error=err, details=err)
+
+        # ── 11. Native COM Automation Verification (Phase 1) ──
+        if t_name in ("com_get_running_apps", "com_excel_read"):
+            if isinstance(raw_result, dict) and raw_result.get("success"):
+                return VerificationResult(
+                    verified=True,
+                    level=VerificationLevel.LEVEL_2,
+                    evidence={"method": raw_result.get("method"), "row_count": raw_result.get("row_count")},
+                    details=f"COM query '{t_name}' executed successfully."
+                )
+            err = raw_result.get("error", "COM query failed.") if isinstance(raw_result, dict) else str(raw_result)
+            return VerificationResult(verified=False, level=VerificationLevel.LEVEL_1, error=err, details=err)
+
+        if t_name in ("com_excel_write", "com_word_create"):
+            if isinstance(raw_result, dict) and raw_result.get("success"):
+                file_target = raw_result.get("file_path") or args.get("file_path")
+                if file_target:
+                    return ResultVerifier.verify_file_exists(file_target, min_bytes=1, level=VerificationLevel.LEVEL_3)
+                return VerificationResult(
+                    verified=True,
+                    level=VerificationLevel.LEVEL_3,
+                    evidence=raw_result,
+                    details=f"COM document action '{t_name}' verified successfully."
+                )
+            err = raw_result.get("error", "COM document creation failed.") if isinstance(raw_result, dict) else str(raw_result)
+            return VerificationResult(verified=False, level=VerificationLevel.LEVEL_1, error=err, details=err)
+
+        # ── 12. Sandboxed Streaming Code REPL Verification (Phase 2) ──
+        if t_name in ("repl_execute_python", "repl_execute_powershell"):
+            if isinstance(raw_result, dict) and raw_result.get("success"):
+                out_txt = raw_result.get("output", "")
+                return VerificationResult(
+                    verified=True,
+                    level=VerificationLevel.LEVEL_2,
+                    evidence={
+                        "execution_count": raw_result.get("execution_count"),
+                        "output_length": len(out_txt),
+                        "elapsed_seconds": raw_result.get("elapsed_seconds")
+                    },
+                    details=f"REPL execution verified successfully ({len(out_txt)} output characters)."
+                )
+            err = raw_result.get("error", "REPL execution failed.") if isinstance(raw_result, dict) else str(raw_result)
+            return VerificationResult(verified=False, level=VerificationLevel.LEVEL_1, error=err, details=err)
+
+        if t_name == "repl_reset_session":
+            if isinstance(raw_result, dict) and raw_result.get("success"):
+                return VerificationResult(
+                    verified=True,
+                    level=VerificationLevel.LEVEL_1,
+                    evidence=raw_result.get("details"),
+                    details="REPL session reset verified."
+                )
+            return VerificationResult(verified=False, level=VerificationLevel.LEVEL_1, error="REPL reset failed.")
+
+        # ── 13. Hardware Sentinel & Ambient Proactive Verification (Phase 3) ──
+        if t_name == "sentinel_get_hardware_status":
+            if isinstance(raw_result, dict) and raw_result.get("success"):
+                return VerificationResult(
+                    verified=True,
+                    level=VerificationLevel.LEVEL_2,
+                    evidence={
+                        "power_profile": raw_result.get("power_profile"),
+                        "cpu_percent": raw_result.get("cpu_percent"),
+                        "battery_percent": raw_result.get("battery_percent")
+                    },
+                    details=f"Hardware status verified (Profile: {raw_result.get('power_profile')}, CPU: {raw_result.get('cpu_percent')}%)."
+                )
+            err = raw_result.get("error", "Hardware status check failed.") if isinstance(raw_result, dict) else str(raw_result)
+            return VerificationResult(verified=False, level=VerificationLevel.LEVEL_1, error=err, details=err)
+
+        if t_name == "sentinel_run_ambient_scan":
+            if isinstance(raw_result, dict) and raw_result.get("success"):
+                return VerificationResult(
+                    verified=True,
+                    level=VerificationLevel.LEVEL_2,
+                    evidence={
+                        "suggestions_count": raw_result.get("suggestions_count", 0),
+                        "scanned_targets": raw_result.get("scanned_targets", [])
+                    },
+                    details=f"Ambient scan verified ({raw_result.get('suggestions_count', 0)} proactive suggestions generated)."
+                )
+            err = raw_result.get("error", "Ambient scan failed.") if isinstance(raw_result, dict) else str(raw_result)
+            return VerificationResult(verified=False, level=VerificationLevel.LEVEL_1, error=err, details=err)
+
+        if t_name == "sentinel_set_power_profile":
+            if isinstance(raw_result, dict) and raw_result.get("success"):
+                return VerificationResult(
+                    verified=True,
+                    level=VerificationLevel.LEVEL_1,
+                    evidence={"profile": raw_result.get("profile"), "mode": raw_result.get("mode")},
+                    details=f"Power profile set to '{raw_result.get('profile')}' ({raw_result.get('mode')}) verified."
+                )
+            err = raw_result.get("error", "Failed to set power profile.") if isinstance(raw_result, dict) else str(raw_result)
+            return VerificationResult(verified=False, level=VerificationLevel.LEVEL_1, error=err, details=err)
+
+        # ── 14. Ghost Operator Verification (Phase 4) ──
+        if t_name == "ghost_list_targetable_windows":
+            if isinstance(raw_result, dict) and raw_result.get("success"):
+                count = raw_result.get("count", len(raw_result.get("windows", [])))
+                return VerificationResult(
+                    verified=True,
+                    level=VerificationLevel.LEVEL_2,
+                    evidence={"windows_count": count},
+                    details=f"Ghost enumerated {count} targetable windows."
+                )
+            err = raw_result.get("error", "Ghost window enumeration failed.") if isinstance(raw_result, dict) else str(raw_result)
+            return VerificationResult(verified=False, level=VerificationLevel.LEVEL_1, error=err, details=err)
+
+        if t_name == "ghost_click_window":
+            if isinstance(raw_result, dict) and raw_result.get("success"):
+                return VerificationResult(
+                    verified=True,
+                    level=VerificationLevel.LEVEL_3,
+                    evidence={
+                        "hwnd": raw_result.get("hwnd"),
+                        "window_title": raw_result.get("window_title"),
+                        "coords": (raw_result.get("x"), raw_result.get("y")),
+                        "button": raw_result.get("button")
+                    },
+                    details=raw_result.get("message", f"Ghost click verified for HWND {raw_result.get('hwnd')}.")
+                )
+            err = raw_result.get("error", "Ghost click failed.") if isinstance(raw_result, dict) else str(raw_result)
+            return VerificationResult(verified=False, level=VerificationLevel.LEVEL_1, error=err, details=err)
+
+        if t_name == "ghost_send_text":
+            if isinstance(raw_result, dict) and raw_result.get("success"):
+                return VerificationResult(
+                    verified=True,
+                    level=VerificationLevel.LEVEL_3,
+                    evidence={
+                        "hwnd": raw_result.get("hwnd"),
+                        "window_title": raw_result.get("window_title"),
+                        "text_length": raw_result.get("text_length", 0)
+                    },
+                    details=raw_result.get("message", f"Ghost text dispatched to HWND {raw_result.get('hwnd')}.")
+                )
+            err = raw_result.get("error", "Ghost text dispatch failed.") if isinstance(raw_result, dict) else str(raw_result)
+            return VerificationResult(verified=False, level=VerificationLevel.LEVEL_1, error=err, details=err)
+
+        # ── 15. Refiner 2.0 Autonomous Tool Verification (Phase 4) ──
+        if t_name == "refiner_synthesize_custom_tool":
+            if isinstance(raw_result, dict) and raw_result.get("success"):
+                tool_name = raw_result.get("tool_name")
+                return VerificationResult(
+                    verified=True,
+                    level=VerificationLevel.LEVEL_3,
+                    evidence={
+                        "tool_name": tool_name,
+                        "promoted_path": raw_result.get("promoted_path"),
+                        "hot_reloaded": raw_result.get("hot_reloaded", True)
+                    },
+                    details=f"Custom tool '{tool_name}' verified and hot-reloaded into live ToolRouter."
+                )
+            err = raw_result.get("error", "Refiner tool synthesis failed.") if isinstance(raw_result, dict) else str(raw_result)
+            return VerificationResult(verified=False, level=VerificationLevel.LEVEL_1, error=err, details=err)
+
         # Default fallback verification (Level 1: tool returned without error)
         is_error = isinstance(raw_result, str) and (
             raw_result.startswith("Error") or 
@@ -379,7 +572,7 @@ class ResultVerifier:
             )
 
     @staticmethod
-    def verify_file_exists(file_path: str, min_bytes: int = 0, expected_content: Optional[str] = None) -> VerificationResult:
+    def verify_file_exists(file_path: str, min_bytes: int = 0, expected_content: Optional[str] = None, level: Optional[VerificationLevel] = None) -> VerificationResult:
         """Check if a file exists on disk, meets size criteria, and matches expected contents (Level 2/3)."""
         if not file_path:
             return VerificationResult(verified=False, level=VerificationLevel.LEVEL_1, details="No file path specified.")
@@ -399,10 +592,10 @@ class ResultVerifier:
                     except Exception:
                         content_matched = False
 
-                level = VerificationLevel.LEVEL_3 if expected_content and content_matched else VerificationLevel.LEVEL_2
+                final_level = level if level is not None else (VerificationLevel.LEVEL_3 if expected_content and content_matched else VerificationLevel.LEVEL_2)
                 return VerificationResult(
                     verified=True,
-                    level=level,
+                    level=final_level,
                     evidence={"path": path_obj, "size_bytes": size, "content_verified": content_matched},
                     details=f"File verified on disk ({size} bytes, content_verified={content_matched})."
                 )
@@ -439,6 +632,44 @@ class ResultVerifier:
             level=VerificationLevel.LEVEL_2,
             evidence={"path": path_obj},
             details=f"File '{file_path}' still exists on disk."
+        )
+
+    @staticmethod
+    def verify_task_objective(task_steps: list, expected_outcome: str = "") -> VerificationResult:
+        """
+        Verify that a multi-step task achieved its overarching objective (Level 4).
+        Requires all planned steps to be completed and verified without errors.
+        """
+        if not task_steps:
+            return VerificationResult(
+                verified=False,
+                level=VerificationLevel.LEVEL_1,
+                details="No steps in task to verify."
+            )
+        
+        all_completed = all(
+            getattr(s, "status", None) in ("COMPLETED", "completed") or 
+            (isinstance(s, dict) and s.get("status") in ("COMPLETED", "completed"))
+            for s in task_steps
+        )
+        has_errors = any(
+            bool(getattr(s, "error", None)) or (isinstance(s, dict) and bool(s.get("error")))
+            for s in task_steps
+        )
+
+        if all_completed and not has_errors:
+            return VerificationResult(
+                verified=True,
+                level=VerificationLevel.LEVEL_4,
+                evidence={"step_count": len(task_steps), "expected_outcome": expected_outcome},
+                details=f"All {len(task_steps)} task steps successfully executed and verified (Level 4 Objective Met)."
+            )
+        
+        return VerificationResult(
+            verified=False,
+            level=VerificationLevel.LEVEL_4,
+            evidence={"step_count": len(task_steps), "all_completed": all_completed, "has_errors": has_errors},
+            details="Task objective not met: one or more steps failed or were not completed."
         )
 
 

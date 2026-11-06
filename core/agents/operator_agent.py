@@ -66,13 +66,31 @@ class OperatorAgent(BaseAgent):
                     
                 result = self.tool_router.execute_tool(name=tool_name, args=resolved_args, interactive=True)
                 
+                # Controlled single retry for safe/idempotent tools
+                safe_retry_tools = {
+                    "read_file", "list_directory", "get_file_info", "search_in_files",
+                    "web_search", "fetch_webpage", "get_weather", "search_news",
+                    "get_system_info", "list_open_windows", "get_active_window_context"
+                }
+                if not result["success"] and tool_name in safe_retry_tools:
+                    import time as _time
+                    log.warning(f"[OperatorAgent] Tool '{tool_name}' failed ({result.get('error')}). Retrying once after backoff...")
+                    _time.sleep(0.3)
+                    result = self.tool_router.execute_tool(name=tool_name, args=resolved_args, interactive=True)
+
                 if result["success"]:
                     # Post-action perceptual verification if requested
+                    perceptual_verified = True
                     if expected_state:
-                        verified = self.vision.verify_state(expected_state)
-                        if not verified:
+                        perceptual_verified = self.vision.verify_state(expected_state)
+                        if not perceptual_verified:
                             log.warning(f"[OperatorAgent] Task {task_id} completed action but failed perceptual verification for: {expected_state}")
-                    return AgentResponse(success=True, content=str(result["result"]), agent=self.name)
+                    return AgentResponse(
+                        success=True,
+                        content=str(result["result"]),
+                        agent=self.name,
+                        metadata={"perceptual_verified": perceptual_verified, "tool": tool_name}
+                    )
                 else:
                     return AgentResponse(success=False, content=str(result.get("error")), agent=self.name, error=str(result.get("error")))
             

@@ -4,7 +4,7 @@ Async message passing between agents with priority queuing and event broadcastin
 """
 
 from collections import defaultdict
-from typing import Optional, Callable
+from typing import Optional, Callable, Any
 
 from core.logger import log, error_log
 from core.agents.base_agent import BaseAgent, AgentMessage, AgentResponse, MessagePriority
@@ -16,7 +16,17 @@ class AgentBus:
     Routes messages between agents and broadcasts events.
     """
 
+    _instance: Optional["AgentBus"] = None
+
+    @classmethod
+    def get_bus(cls) -> "AgentBus":
+        """Return the shared singleton AgentBus instance."""
+        if cls._instance is None:
+            cls._instance = AgentBus()
+        return cls._instance
+
     def __init__(self):
+        AgentBus._instance = self
         self._agents: dict[str, BaseAgent] = {}
         self._event_listeners: dict[str, list[Callable]] = defaultdict(list)
         self._message_log: list[dict] = []
@@ -94,21 +104,47 @@ class AgentBus:
         )
         return self.send(msg)
 
+    # Alias for send to support both naming styles
+    def send_message(self, message: AgentMessage) -> AgentResponse:
+        """Alias for send()."""
+        return self.send(message)
+
     # ─── Event Broadcasting ───────────────────────────────────────────────────
 
-    def broadcast(self, event: AgentMessage) -> None:
+    def broadcast(self, event: Any) -> None:
         """
-        Broadcast an event to all registered agents.
+        Broadcast an event to all registered agents and event listeners.
 
         Args:
-            event: The event message (msg_type should be "event").
+            event: The event message (AgentMessage, string, or dict).
         """
+        if isinstance(event, str):
+            event = AgentMessage(sender="bus", recipient="*", content=event, msg_type="event")
+        elif isinstance(event, dict):
+            event = AgentMessage(
+                sender=event.get("sender", "bus"),
+                recipient=event.get("recipient", "*"),
+                content=event.get("content", "event"),
+                msg_type="event",
+                metadata=event
+            )
         event.msg_type = "event"
         for agent in self._agents.values():
             try:
                 agent.handle_event(event)
             except Exception as e:
                 error_log.error(f"Event handler failed for {agent.name}: {e}")
+
+        # Dispatch to registered external event listeners
+        event_type = event.metadata.get("type") or event.content
+        listeners = list(self._event_listeners.get(event_type, []))
+        if "*" in self._event_listeners and event_type != "*":
+            listeners.extend(self._event_listeners["*"])
+        for cb in listeners:
+            try:
+                cb(event)
+            except Exception as e:
+                error_log.error(f"Event listener callback failed for {event_type}: {e}")
 
     def on_event(self, event_type: str, callback: Callable) -> None:
         """Register a callback for a specific event type."""
