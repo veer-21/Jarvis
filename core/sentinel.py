@@ -381,33 +381,9 @@ class AmbientSentinel:
         log.info(f"[AmbientSentinel] Dispatching [{suggestion.category}]: {suggestion.title}")
 
         # 1. Native Windows Toast Notification (Cooperative non-blocking background thread)
-        if notify_toast and os.name == "nt":
-            def _toast():
-                try:
-                    import subprocess
-                    ps_script = """
-                    [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
-                    $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
-                    $textNodes = $template.GetElementsByTagName("text")
-                    $textNodes.Item(0).AppendChild($template.CreateTextNode($env:JARVIS_TOAST_TITLE)) > $null
-                    $textNodes.Item(1).AppendChild($template.CreateTextNode($env:JARVIS_TOAST_MSG)) > $null
-                    $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("JARVIS Sentinel")
-                    $notification = [Windows.UI.Notifications.ToastNotification]::new($template)
-                    $notifier.Show($notification)
-                    """
-                    env = os.environ.copy()
-                    env["JARVIS_TOAST_TITLE"] = str(suggestion.title)
-                    env["JARVIS_TOAST_MSG"] = str(suggestion.message)
-                    subprocess.run(
-                        ["powershell", "-NoProfile", "-Command", ps_script],
-                        env=env,
-                        capture_output=True,
-                        timeout=5
-                    )
-                except Exception as e:
-                    log.debug(f"[AmbientSentinel] Toast dispatch fallback: {e}")
-
-            threading.Thread(target=_toast, daemon=True, name="JarvisSentinelToast").start()
+        if notify_toast:
+            from core.os_adapter import show_notification
+            show_notification(str(suggestion.title), str(suggestion.message), app_id="JARVIS Sentinel")
 
         # 2. WebSocket Broadcast (To Cyberpunk HUD & React Desktop App)
         if broadcast_ws:

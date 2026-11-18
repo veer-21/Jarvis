@@ -2,7 +2,7 @@
 JARVIS — Filesystem locations
 
 Single source of truth for where JARVIS keeps per-user runtime data (memory, keys, tasks,
-screenshots, preferences) and logs. Nothing else should hard-code a path like D:\\Jarvis.
+screenshots, preferences) and logs. Nothing else should hard-code a drive or install path.
 
 Resolution order for the data directory:
   1. ``JARVIS_DATA_DIR`` environment variable (used by tests, portable installs, power users)

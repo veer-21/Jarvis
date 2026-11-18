@@ -119,7 +119,7 @@ def com_excel_read(file_path: str, sheet_name: Optional[str] = None, max_rows: i
     # Try native COM dispatch first if Excel is running or available
     try:
         import win32com.client
-        excel = win32com.client.Dispatch("Excel.Application")
+        excel = win32com.client.DispatchEx("Excel.Application")  # private instance: never hijack or Quit() the user's open Excel
         excel.Visible = False
         excel.DisplayAlerts = False
         try:
@@ -195,7 +195,7 @@ def com_excel_write(file_path: str, rows: List[List[Any]], sheet_name: Optional[
     # Try native COM dispatch first if Excel is available
     try:
         import win32com.client
-        excel = win32com.client.Dispatch("Excel.Application")
+        excel = win32com.client.DispatchEx("Excel.Application")  # private instance: never hijack or Quit() the user's open Excel
         excel.Visible = False
         excel.DisplayAlerts = False
         try:
@@ -274,7 +274,7 @@ def com_word_create(file_path: str, text_content: str, title: Optional[str] = No
     # Try native COM dispatch first if Word is available
     try:
         import win32com.client
-        word = win32com.client.Dispatch("Word.Application")
+        word = win32com.client.DispatchEx("Word.Application")  # private instance: never hijack or Quit() the user's open Word
         word.Visible = False
         try:
             doc = word.Documents.Add()

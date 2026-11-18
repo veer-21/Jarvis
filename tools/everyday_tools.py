@@ -342,31 +342,9 @@ def _trigger_reminder_action(reminder_id: str, title: str, message: str) -> None
         _save_reminders(reminders)
         _active_timer_threads.pop(reminder_id, None)
 
-    # 1. Windows Notification (PowerShell BurntToast / Toast fallback)
-    def notify_worker():
-        try:
-            ps_script = """
-            [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
-            $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
-            $textNodes = $template.GetElementsByTagName("text")
-            $textNodes.Item(0).AppendChild($template.CreateTextNode($env:JARVIS_REM_TITLE)) > $null
-            $textNodes.Item(1).AppendChild($template.CreateTextNode($env:JARVIS_REM_MSG)) > $null
-            $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("JARVIS")
-            $notification = [Windows.UI.Notifications.ToastNotification]::new($template)
-            $notifier.Show($notification)
-            """
-            env = os.environ.copy()
-            env["JARVIS_REM_TITLE"] = str(title)
-            env["JARVIS_REM_MSG"] = str(message)
-            subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], env=env, capture_output=True, timeout=5)
-        except Exception:
-            try:
-                import ctypes
-                ctypes.windll.user32.MessageBoxW(0, message or title, f"JARVIS Reminder: {title}", 0x40 | 0x10000)
-            except Exception:
-                pass
-
-    threading.Thread(target=notify_worker, daemon=True).start()
+    # 1. Desktop notification (Windows toast; message-box fallback) via the OS adapter
+    from core.os_adapter import show_notification
+    show_notification(title, message, app_id="JARVIS", fallback_dialog=True)
 
     # 2. WebSocket event broadcast
     try:

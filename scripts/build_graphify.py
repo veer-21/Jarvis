@@ -8,7 +8,7 @@ from graphify.report import generate
 from graphify.export import to_json, to_html
 
 
-root = Path("d:/Jarvis")
+root = Path(__file__).resolve().parent.parent  # project root
 detect = json.loads(Path("graphify-out/.graphify_detect.json").read_text(encoding="utf-8"))
 code_files = [Path(f) for f in detect.get("files", {}).get("code", [])]
 print(f"1. Extracting AST for {len(code_files)} code files...")

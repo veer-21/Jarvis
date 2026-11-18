@@ -215,33 +215,33 @@ class OpenAICompatibleClient:
 
 # ─── Settings helpers ────────────────────────────────────────────────────────
 
-def _env_float(name: str, default: float) -> float:
+def _setting(name: str, default):
     try:
-        return float(os.environ.get(name, default))
-    except (TypeError, ValueError):
-        return default
-
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, default))
-    except (TypeError, ValueError):
+        from core.settings import get_setting
+        return get_setting(name, default)
+    except Exception:
         return default
 
 
 def default_request_timeout() -> float:
     """Per-request timeout (seconds) for every LLM call."""
-    return _env_float("JARVIS_LLM_TIMEOUT_SECONDS", 60.0)
+    try:
+        return float(_setting("llm_timeout_seconds", 60.0))
+    except (TypeError, ValueError):
+        return 60.0
 
 
 def default_max_output_tokens() -> int:
     """Upper bound on generated tokens per LLM call (cost and latency control)."""
-    return _env_int("JARVIS_MAX_OUTPUT_TOKENS", 4096)
+    try:
+        return int(_setting("max_output_tokens", 4096))
+    except (TypeError, ValueError):
+        return 4096
 
 
 def default_ollama_model() -> str:
-    return os.environ.get("OLLAMA_MODEL", "llama3.2")
+    return str(_setting("ollama_model", "llama3.2"))
 
 
 def default_openai_model() -> str:
-    return os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    return str(_setting("openai_model", "gpt-4o-mini"))

@@ -18,17 +18,23 @@ def get_groq_api_key():
 def get_openai_api_key():
     return _secret("OPENAI_API_KEY")
 
+def _setting(name: str, default):
+    # settings.json (set from the app) > environment / .env > default. See core/settings.py.
+    from core.settings import get_setting
+    return get_setting(name, default)
+
+
 def get_ollama_host():
-    return os.environ.get("OLLAMA_HOST")
+    return _setting("ollama_host", None)
 
 def get_primary_engine():
-    return os.environ.get("PRIMARY_ENGINE", "gemini").lower()
+    return str(_setting("primary_engine", "gemini")).lower()
 
 def get_groq_model():
-    return os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+    return _setting("groq_model", "llama-3.3-70b-versatile")
 
 def get_model_name():
-    return os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    return _setting("gemini_model", "gemini-2.5-flash")
 
 
 # --- API Server / Network Exposure ---
@@ -83,10 +89,10 @@ def get_allowed_hosts() -> list[str]:
 
 # --- Voice Settings ---
 def get_voice_engine():
-    return os.environ.get("VOICE_ENGINE", "edge-tts")  # Options: edge-tts, elevenlabs
+    return _setting("voice_engine", "edge-tts")  # Options: edge-tts, elevenlabs
 
 def get_voice_profile():
-    return os.environ.get("VOICE_PROFILE", "Jarvis Classic")
+    return _setting("voice_profile", "Jarvis Classic")
 
 def get_wake_words():
     # Comma separated list

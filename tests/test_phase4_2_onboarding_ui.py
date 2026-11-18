@@ -361,10 +361,10 @@ def test_powershell_toast_safety_with_quotes_and_special_chars(monkeypatch):
     cmd_text = captured_call["cmd"][3]
     assert special_title not in cmd_text
     assert special_message not in cmd_text
-    assert "$env:JARVIS_REM_TITLE" in cmd_text
-    assert "$env:JARVIS_REM_MSG" in cmd_text
+    assert "$env:JARVIS_NOTIFY_TITLE" in cmd_text
+    assert "$env:JARVIS_NOTIFY_MSG" in cmd_text
 
     # Values must be safely preserved in env dictionary
-    assert captured_call["env"].get("JARVIS_REM_TITLE") == special_title
-    assert captured_call["env"].get("JARVIS_REM_MSG") == special_message
+    assert captured_call["env"].get("JARVIS_NOTIFY_TITLE") == special_title
+    assert captured_call["env"].get("JARVIS_NOTIFY_MSG") == special_message
 

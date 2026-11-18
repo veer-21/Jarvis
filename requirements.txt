@@ -46,6 +46,19 @@ python-docx>=1.0.0              # Word document text extraction
 # ── Environment & Config ──────────────────────────────────────
 python-dotenv>=1.0.0            # .env file loading
 
+# ── Previously missing direct imports ─────────────────────────
+httpx>=0.28.1                   # LLM provider client (Groq / OpenAI / Ollama)
+openpyxl>=3.1.0                 # Excel fallback when Office is not installed
+pyperclip>=1.9.0                # Clipboard tools
+PyGetWindow>=0.0.9              # Window verification
+pywin32>=306; sys_platform == "win32"     # Credential Manager vault, COM, Win32
+pywinauto>=0.6.8; sys_platform == "win32" # UI Automation tools
+comtypes>=1.4.0; sys_platform == "win32"  # UI Automation backend
+
+# NOTE: pyproject.toml + uv.lock are now the source of truth (exact pinned versions):
+#   uv sync                      # core
+#   uv sync --extra voice --extra browser   # optional features
+
 # ── Optional: Local Whisper STT ──────────────────────────────
 # Uncomment to enable local offline speech recognition:
 # openai-whisper>=20240930

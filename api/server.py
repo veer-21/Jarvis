@@ -57,7 +57,7 @@ from api.models import (
     OnboardingConfigureRequest, OnboardingConfigureResponse,
 )
 from api.auth import create_access_token, revoke_token, require_auth, AuthRequired, _bearer_scheme
-from core.logger import log, error_log
+from core.logger import log, error_log, audit_log
 from core.security import owner_auth, guard
 from api.ws_manager import ws_manager
 from core.brain import Brain as JarvisBrain
@@ -1310,6 +1310,68 @@ async def trigger_optimization(auth: AuthRequired):
         else:
             raise HTTPException(status_code=500, detail=res.content)
     raise HTTPException(status_code=503, detail="Refiner Agent not available.")
+
+
+# ─── Settings Routes ──────────────────────────────────────────────────────────
+# Backend for the app's Settings screen. Non-secret values live in settings.json; API keys
+# go to the OS credential vault and are never returned (only whether each one is set).
+
+from pydantic import BaseModel as _BaseModel, Field as _Field
+
+
+class SecretUpdateRequest(_BaseModel):
+    name: str
+    value: str = _Field(min_length=1, max_length=500)
+
+
+@app.get("/settings", tags=["Settings"])
+async def get_settings_route(auth: AuthRequired):
+    from core.settings import load_settings, MANAGED_SECRETS
+    from core.secrets_store import resolve, backend_name
+    health = None
+    if _brain is not None and hasattr(_brain.reasoning, "provider_health"):
+        health = _brain.reasoning.provider_health()
+    return {
+        "settings": load_settings().model_dump(),
+        "secrets_configured": {name: bool(resolve(name)) for name in MANAGED_SECRETS},
+        "secret_backend": backend_name(),
+        "provider_health": health,
+    }
+
+
+@app.put("/settings", tags=["Settings"])
+async def put_settings_route(body: dict, auth: AuthRequired):
+    from pydantic import ValidationError
+    from core.settings import update_settings
+    try:
+        updated = update_settings(body)
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=e.errors(include_url=False, include_context=False))
+    return {"settings": updated.model_dump(), "note": "Restart JARVIS to apply provider or model changes."}
+
+
+@app.put("/settings/secrets", tags=["Settings"])
+async def put_secret_route(body: SecretUpdateRequest, auth: AuthRequired):
+    from core.settings import MANAGED_SECRETS
+    from core.secrets_store import set_secret
+    if body.name not in MANAGED_SECRETS:
+        raise HTTPException(status_code=400, detail=f"Unknown secret '{body.name}'.")
+    backend = set_secret(body.name, body.value.strip())
+    if backend is None:
+        raise HTTPException(status_code=503, detail="No credential vault is available on this system.")
+    audit_log.info({"event": "SECRET_UPDATED", "name": body.name, "backend": backend, "timestamp": _ts()})
+    return {"stored": True, "backend": backend, "note": "Restart JARVIS to use the new key."}
+
+
+@app.delete("/settings/secrets/{name}", tags=["Settings"])
+async def delete_secret_route(name: str, auth: AuthRequired):
+    from core.settings import MANAGED_SECRETS
+    from core.secrets_store import delete_secret
+    if name not in MANAGED_SECRETS:
+        raise HTTPException(status_code=400, detail=f"Unknown secret '{name}'.")
+    removed = delete_secret(name)
+    audit_log.info({"event": "SECRET_DELETED", "name": name, "removed": removed, "timestamp": _ts()})
+    return {"removed": removed}
 
 
 # ─── Onboarding & Diagnostics Routes ──────────────────────────────────────────

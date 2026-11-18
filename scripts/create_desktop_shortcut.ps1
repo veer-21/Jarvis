@@ -8,7 +8,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$TargetDirectory = "D:\Jarvis",
+    [string]$TargetDirectory = (Split-Path -Parent $PSScriptRoot),
     [string]$ShortcutName = "JARVIS AI Assistant.lnk"
 )
 

@@ -80,11 +80,15 @@ class PromptComposer:
         if include_memory:
             layers.append(MEMORY_PROMPT)
             
-            # Check for Project Brain context in active repository
+            # Developer-only: inject the repository's "Project Brain" notes (brain/*.md).
+            # These are notes about building JARVIS, not about the user, and MemoryAgent appends
+            # LLM-written text to some of them, so they stay out of end-user prompts unless a
+            # developer opts in with JARVIS_INCLUDE_PROJECT_BRAIN=1.
             import os
-            from pathlib import Path
-            project_brain_dir = Path(os.getcwd()) / "brain"
-            if project_brain_dir.exists() and project_brain_dir.is_dir():
+            from core.paths import PROJECT_ROOT
+            project_brain_dir = PROJECT_ROOT / "brain"
+            if (os.environ.get("JARVIS_INCLUDE_PROJECT_BRAIN") == "1"
+                    and project_brain_dir.exists() and project_brain_dir.is_dir()):
                 pb_layers = []
                 files_to_load = [
                     ("master-memory.md", "[PROJECT BRAIN - MASTER MEMORY]"),
