@@ -11,6 +11,8 @@ import os
 import json
 import pytest
 from pathlib import Path
+import core.paths as _paths  # isolated test data dir
+from core.paths import PROJECT_ROOT
 from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 
@@ -24,7 +26,7 @@ from core.security import owner_auth, PIN_FILE
 @pytest.fixture(autouse=True)
 def isolate_onboarding_test_environment():
     """Backup and restore .env and os.environ so tests never leave mock keys or corrupted environment behind."""
-    env_file = Path(r"D:\Jarvis\.env")
+    env_file = (_paths.data_dir() / ".env.fixture-guard")  # tests never touch the real .env
     env_bak = None
     if env_file.exists():
         try:
@@ -33,7 +35,7 @@ def isolate_onboarding_test_environment():
         except Exception:
             env_bak = None
 
-    reminders_file = Path(r"D:\Jarvis\data\tasks\reminders.json")
+    reminders_file = _paths.reminders_file()
     reminders_bak = None
     if reminders_file.exists():
         try:
@@ -42,7 +44,7 @@ def isolate_onboarding_test_environment():
         except Exception:
             reminders_bak = None
 
-    todos_file = Path(r"D:\Jarvis\data\tasks\personal_todos.json")
+    todos_file = _paths.todos_file()
     todos_bak = None
     if todos_file.exists():
         try:
@@ -145,7 +147,7 @@ def test_onboarding_configure_name_and_city(onboarding_test_setup):
     token = onboarding_test_setup["token_owner"]
     headers = {"Authorization": f"Bearer {token}"}
 
-    prefs_file = Path(r"D:\Jarvis\data\user_preferences.json")
+    prefs_file = _paths.user_preferences_file()
 
     resp = client.post(
         "/onboarding/configure",
@@ -187,11 +189,14 @@ def test_onboarding_configure_gemini_api_key(onboarding_test_setup):
 
     assert os.environ.get("GEMINI_API_KEY") == dummy_key
 
-    env_path = Path(r"D:\Jarvis\.env")
+    # Stored in the credential vault (in-memory backend under test), never in plain-text .env
+    from core.secrets_store import get_secret
+    assert get_secret("GEMINI_API_KEY") == dummy_key
+    env_path = (PROJECT_ROOT / ".env")
     if env_path.exists():
         with open(env_path, "r", encoding="utf-8") as f:
             content = f.read()
-        assert dummy_key in content
+        assert dummy_key not in content
 
 
 def test_onboarding_configure_pin_length_validation(onboarding_test_setup):
@@ -282,7 +287,7 @@ def test_generate_daily_briefing_user_preferences_integration(tmp_path, monkeypa
     - Verifies fallback to 'Sir' when no name is set.
     """
     from tools.everyday_tools import generate_daily_briefing
-    prefs_file = Path(r"D:\Jarvis\data\user_preferences.json")
+    prefs_file = _paths.user_preferences_file()
     prefs_file.parent.mkdir(parents=True, exist_ok=True)
 
     original_content = None

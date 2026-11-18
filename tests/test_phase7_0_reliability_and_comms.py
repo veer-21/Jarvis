@@ -16,6 +16,8 @@ import time
 import json
 import urllib.parse
 from pathlib import Path
+import core.paths as _paths  # isolated test data dir
+from core.paths import PROJECT_ROOT
 from unittest.mock import MagicMock, patch
 import pytest
 
@@ -35,7 +37,7 @@ from tools.everyday_tools import (
 @pytest.fixture(autouse=True)
 def isolate_reliability_test_environment():
     """Ensure no background timers leak and isolate reminders, todos, and .env."""
-    reminders_file = Path(r"D:\Jarvis\data\tasks\reminders.json")
+    reminders_file = _paths.reminders_file()
     reminders_bak = None
     if reminders_file.exists():
         try:
@@ -44,7 +46,7 @@ def isolate_reliability_test_environment():
         except Exception:
             reminders_bak = None
 
-    todos_file = Path(r"D:\Jarvis\data\tasks\personal_todos.json")
+    todos_file = _paths.todos_file()
     todos_bak = None
     if todos_file.exists():
         try:
@@ -53,7 +55,7 @@ def isolate_reliability_test_environment():
         except Exception:
             todos_bak = None
 
-    env_file = Path(r"D:\Jarvis\.env")
+    env_file = (_paths.data_dir() / ".env.fixture-guard")  # tests never touch the real .env
     env_bak = None
     if env_file.exists():
         try:
@@ -372,7 +374,7 @@ def test_orchestrator_routes_compose_message_to():
 
 def test_create_desktop_shortcut_script_exists_and_valid():
     """Verifies scripts/create_desktop_shortcut.ps1 exists and uses WScript.Shell with proper target."""
-    script_path = Path(r"D:\Jarvis\scripts\create_desktop_shortcut.ps1")
+    script_path = (PROJECT_ROOT / "scripts" / "create_desktop_shortcut.ps1")
     assert script_path.exists(), "scripts/create_desktop_shortcut.ps1 must exist"
 
     content = script_path.read_text(encoding="utf-8")

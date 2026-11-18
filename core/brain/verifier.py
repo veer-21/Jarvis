@@ -203,7 +203,8 @@ class ResultVerifier:
         if t_name == "create_reminder_or_timer":
             if isinstance(raw_result, dict) and raw_result.get("success"):
                 rem_id = raw_result.get("reminder_id")
-                rem_path = r"D:\Jarvis\data\tasks\reminders.json"
+                from core.paths import reminders_file
+                rem_path = str(reminders_file())
                 persisted = False
                 if os.path.exists(rem_path):
                     try:
@@ -285,7 +286,8 @@ class ResultVerifier:
         # ── 8. Personal Productivity Suite Verification (Phase 5.0) ──
         if t_name == "manage_personal_notes_and_todos":
             if isinstance(raw_result, dict) and raw_result.get("success"):
-                todos_file = Path(r"D:\Jarvis\data\tasks\personal_todos.json")
+                from core.paths import todos_file as _todos_file
+                todos_file = _todos_file()
                 persisted = todos_file.exists()
                 return VerificationResult(
                     verified=persisted,

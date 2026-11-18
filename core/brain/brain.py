@@ -7,7 +7,7 @@ This is the primary entry point for all AI operations. It wires together:
   - ToolRouter       (tool registration & execution)
   - ContextManager   (prompt enrichment)
   - MemoryManager    (memory interface)
-  - ExecutionManager  (task planning & execution)
+  - AssistantOrchestrator (planning, execution, verification)
   - ResponseGenerator (output formatting)
   - StreamingManager  (real-time streaming)
   - PromptComposer   (layered system prompts)
@@ -24,7 +24,6 @@ from core.brain.reasoning_engine   import ReasoningEngine
 from core.brain.tool_router        import ToolRouter
 from core.brain.context_manager    import ContextManager
 from core.brain.memory_manager     import MemoryManager
-from core.brain.execution_manager  import ExecutionManager
 from core.brain.response_generator import ResponseGenerator
 from core.brain.streaming_manager  import StreamingManager
 from core.brain.intent_classifier  import IntentClassifier
@@ -100,7 +99,6 @@ class Brain:
         self.reasoning       = ReasoningEngine(api_key=api_key, model_name=model_name)
         self.tools           = ToolRouter()
         self.context         = ContextManager(memory_manager=self.memory_manager)
-        self.execution       = ExecutionManager()
         self.response        = ResponseGenerator()
         self.streaming       = StreamingManager()
         self.prompts         = PromptComposer()
@@ -110,7 +108,6 @@ class Brain:
         self.reasoning.set_tool_router(self.tools)
         self.streaming.set_reasoning_engine(self.reasoning)
         self.streaming.set_memory_manager(self.memory_manager)
-        self.execution.set_brain(self)
 
         # ── Legacy planner support ───────────────────────────────────────────
         self._planner = None
@@ -151,6 +148,13 @@ class Brain:
         log.info(f"Brain online. {self.tools.tool_count} tools registered across "
                  f"{len(self.tools.get_categories())} categories. "
                  f"{self.agent_bus.agent_count} agents active.")
+
+        # Let background jobs (scheduler) reuse this instance instead of booting new Brains.
+        try:
+            from core.daemon_instance import set_shared_brain
+            set_shared_brain(self)
+        except Exception:
+            pass
 
     # ─── Tool Registration ────────────────────────────────────────────────────
 
@@ -282,28 +286,40 @@ class Brain:
             tool_categories=self.tools.get_categories(),
             has_memory=self.memory_manager.is_active,
         )
-        
+        self.reasoning.create_chat_session(system_prompt, self._chat_tool_callables())
+
+    # Tool categories offered to free-form chat. Everything goes through the ToolRouter wrapper,
+    # so the security policy, confirmations, verification and audit log always apply.
+    CHAT_TOOL_CATEGORIES = ["web", "system", "file", "browser", "everyday"]
+    CHAT_EXTRA_TOOLS = {"get_system_info", "take_screenshot", "analyze_screen", "list_open_windows"}
+
+    def _chat_tool_callables(self) -> list:
+        """The one tool list used by every chat session (startup, model switch and reset)."""
         import os
-        is_offline = os.getenv("JARVIS_OFFLINE") == "1"
-        
-        if is_offline:
-            # Offline mode with a 3B model (llama3.2) is extremely slow and hallucination-prone when given complex tools.
-            # We provide NO tools for general chat so it runs incredibly fast and accurately on local hardware.
-            # (Tasks will still use tools via the Action-First ExecutionManager if requested).
-            tool_callables = []
-        else:
-            # Provide safe informational & inspection tools to general chat
-            tool_callables = self.tools.get_all_callables(categories=["web", "system", "file", "browser", "everyday"])
-            # Include safe system inspection tools — always via the ToolRouter wrapper so they
-            # go through the security policy, verification and audit log like every other tool.
-            safe_auto_names = {"get_system_info", "take_screenshot", "analyze_screen", "list_open_windows"}
-            present = {getattr(fn, "__name__", None) for fn in tool_callables}
-            for fn in self.tools.get_all_callables():
-                name = getattr(fn, "__name__", None)
-                if name in safe_auto_names and name not in present:
-                    tool_callables.append(fn)
-            
-        self.reasoning.create_chat_session(system_prompt, tool_callables)
+        if os.getenv("JARVIS_OFFLINE") == "1":
+            # Small local models are slow and hallucination-prone with many tools; chat stays tool-free.
+            return []
+        tool_callables = self.tools.get_all_callables(categories=self.CHAT_TOOL_CATEGORIES)
+        present = {getattr(fn, "__name__", None) for fn in tool_callables}
+        for fn in self.tools.get_all_callables():
+            name = getattr(fn, "__name__", None)
+            if name in self.CHAT_EXTRA_TOOLS and name not in present:
+                tool_callables.append(fn)
+        return tool_callables
+
+    @staticmethod
+    def _local_context(store_memory: bool = True, cancellation_token=None):
+        """
+        Context for requests coming from this machine's own front-ends (CLI, voice, scheduler).
+        They act as the local owner, so memory recall, "forget ..." and history work everywhere
+        and are shared with the desktop app / API (whose tokens are issued for the same owner).
+        """
+        from core.brain.task_model import ExecutionContext
+        from core.paths import LOCAL_OWNER_ID
+        kwargs = {"store_memory": store_memory, "user_id": LOCAL_OWNER_ID, "session_id": "local"}
+        if cancellation_token is not None:
+            kwargs["cancellation_token"] = cancellation_token
+        return ExecutionContext(**kwargs)
 
     def _get_system_prompt(self, for_task: bool = False, for_api: bool = False) -> str:
         """Get the appropriate composed system prompt."""
@@ -336,8 +352,7 @@ class Brain:
         Returns:
             JARVIS's text response.
         """
-        from core.brain.task_model import ExecutionContext
-        ctx = context if context is not None else ExecutionContext(store_memory=store_memory)
+        ctx = context if context is not None else self._local_context(store_memory=store_memory)
         return self.orchestrator.process(user_input, context=ctx)
 
     # ─── Streaming ────────────────────────────────────────────────────────────
@@ -366,7 +381,7 @@ class Brain:
             if interrupt_event is not None and ctx.cancellation_token is None:
                 ctx.cancellation_token = interrupt_event
         else:
-            ctx = ExecutionContext(store_memory=True, cancellation_token=interrupt_event)
+            ctx = self._local_context(store_memory=True, cancellation_token=interrupt_event)
         async for chunk in self.orchestrator.process_stream(user_input, interrupt_event=interrupt_event, context=ctx):
             yield chunk
 
@@ -390,8 +405,7 @@ class Brain:
             Formatted execution report.
         """
         log.info(f"Executing task via AssistantOrchestrator: {task}")
-        from core.brain.task_model import ExecutionContext
-        ctx = context if context is not None else ExecutionContext(store_memory=store_memory)
+        ctx = context if context is not None else self._local_context(store_memory=store_memory)
         # AssistantOrchestrator is the authoritative engine and owns memory policy enforcement.
         # Brain does not duplicate memory persistence.
         result = self.orchestrator.process(task, context=ctx)
@@ -402,13 +416,12 @@ class Brain:
     def switch_model(self, model_name: str) -> str:
         """Switch to a different LLM model."""
         system_prompt = self._get_system_prompt()
-        tools = self.tools.get_all_callables()
-        return self.reasoning.switch_model(model_name, system_prompt, tools)
+        return self.reasoning.switch_model(model_name, system_prompt, self._chat_tool_callables())
 
     def reset_chat(self, session_id: Optional[str] = None, user_id: Optional[str] = None) -> str:
         """Reset the chat session strictly scoped to session_id and user_id (P0-3, P0-4)."""
         system_prompt = self._get_system_prompt()
-        tools = self.tools.get_all_callables()
+        tools = self._chat_tool_callables()
         if self._memory:
             self._memory.conversations.clear(session_id=session_id, user_id=user_id)
         if self.memory_manager:
@@ -448,6 +461,6 @@ class Brain:
             "model":          self.reasoning.model_name,
             "tools_count":    self.tools.tool_count,
             "memory_active":  self.memory_manager.is_active,
-            "planner_active": self._planner is not None or True,  # ExecutionManager always available
+            "planner_active": True,  # AssistantOrchestrator planning is always available
             "tool_categories": list(self.tools.get_categories().keys()),
         }

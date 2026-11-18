@@ -16,6 +16,19 @@ def get_daemon() -> ProactiveDaemon:
         _global_daemon.start()
     return _global_daemon
 
+_shared_brain = None
+
+
+def set_shared_brain(brain) -> None:
+    """Register the running Brain so background jobs reuse it instead of creating new ones."""
+    global _shared_brain
+    _shared_brain = brain
+
+
+def get_shared_brain():
+    return _shared_brain
+
+
 def set_daemon(daemon: ProactiveDaemon) -> None:
     """Set the shared ProactiveDaemon instance."""
     global _global_daemon

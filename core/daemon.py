@@ -174,14 +174,20 @@ class ProactiveDaemon:
                     prevent_windows_sleep(True)
                     start_time = datetime.now()
                     try:
-                        brain = Brain()
-                        result = brain.execute_task(task_desc)
+                        # Reuse the running assistant instead of booting a whole new Brain
+                        # (tools, Chroma client, agent bus) for every scheduled job.
+                        from core.daemon_instance import get_shared_brain, set_shared_brain
+                        brain = get_shared_brain()
+                        if brain is None:
+                            brain = Brain()
+                            set_shared_brain(brain)
+                        result = str(brain.execute_task(task_desc))
                         self._alert(f"Scheduled task '{task_desc}' finished: {result[:120]}")
                         
                         # 2. Write Unattended Activity Audit Trail
                         from pathlib import Path
-                        log_dir = Path(__file__).parent.parent / "logs"
-                        log_dir.mkdir(parents=True, exist_ok=True)
+                        from core.paths import logs_dir
+                        log_dir = logs_dir()
                         unattended_file = log_dir / "unattended_activity.md"
                         
                         duration = (datetime.now() - start_time).total_seconds()
@@ -189,7 +195,7 @@ class ProactiveDaemon:
                             f"\n## 📋 Scheduled Task Report — {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
                             f"- **Goal:** {task_desc}\n"
                             f"- **Duration:** {duration:.1f} seconds\n"
-                            f"- **Status:** Completed Successfully ✅\n"
+                            f"- **Status:** {'Failed ❌' if result.lower().startswith(('error', 'failed', 'blocked')) else 'Finished'}\n"
                             f"- **Summary:**\n```\n{result[:1000]}\n```\n"
                             f"{'─'*50}\n"
                         )

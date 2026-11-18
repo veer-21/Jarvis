@@ -1459,7 +1459,8 @@ async def configure_onboarding(
             )
 
     configured_items: list[str] = []
-    user_prefs_file = _PROJECT_ROOT / "data" / "user_preferences.json"
+    from core.paths import user_preferences_file
+    user_prefs_file = user_preferences_file()
     user_prefs_file.parent.mkdir(parents=True, exist_ok=True)
     prefs_data = {}
     if user_prefs_file.exists():
@@ -1487,10 +1488,14 @@ async def configure_onboarding(
     if body.gemini_api_key:
         api_key = body.gemini_api_key.strip()
         if len(api_key) > 5:
+            # Preferred: OS credential vault (Windows Credential Manager). Only when no vault is
+            # available do we fall back to the legacy plain-text .env file.
+            from core.secrets_store import set_secret
+            stored_in = set_secret("GEMINI_API_KEY", api_key)
             env_file = _PROJECT_ROOT / ".env"
             lines = []
             found = False
-            if env_file.exists():
+            if stored_in is None and env_file.exists():
                 with open(env_file, "r", encoding="utf-8") as f:
                     for line in f:
                         stripped = line.strip()
@@ -1499,14 +1504,15 @@ async def configure_onboarding(
                             found = True
                         else:
                             lines.append(line)
-            if not found:
-                lines.append(f"GEMINI_API_KEY={api_key}\n")
-            with open(env_file, "w", encoding="utf-8") as f:
-                f.writelines(lines)
+            if stored_in is None:
+                if not found:
+                    lines.append(f"GEMINI_API_KEY={api_key}\n")
+                with open(env_file, "w", encoding="utf-8") as f:
+                    f.writelines(lines)
             import os
             os.environ["GEMINI_API_KEY"] = api_key
             masked = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) >= 8 else "***"
-            log.info(f"Configured GEMINI_API_KEY securely (masked: {masked})")
+            log.info(f"Configured GEMINI_API_KEY in {stored_in or '.env'} (masked: {masked})")
             configured_items.append("gemini_api_key")
 
     # 4. Owner PIN

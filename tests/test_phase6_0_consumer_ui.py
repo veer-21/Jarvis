@@ -12,6 +12,8 @@ import os
 import json
 import pytest
 from pathlib import Path
+import core.paths as _paths  # isolated test data dir
+from core.paths import PROJECT_ROOT
 from fastapi.testclient import TestClient
 
 from api.server import app, set_server_brain
@@ -25,7 +27,7 @@ from tools.everyday_tools import (
     _todos_lock,
 )
 
-WORKSPACE_ROOT = Path(r"D:\Jarvis")
+WORKSPACE_ROOT = PROJECT_ROOT
 
 
 @pytest.fixture(autouse=True)

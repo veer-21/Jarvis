@@ -15,6 +15,8 @@ import os
 import sys
 import json
 from pathlib import Path
+import core.paths as _paths  # isolated test data dir
+from core.paths import PROJECT_ROOT
 from unittest.mock import MagicMock, patch
 import pytest
 
@@ -100,7 +102,7 @@ def test_smart_email_signer_name_from_user_preferences(tmp_path, monkeypatch):
 def test_smart_email_fallback_signer_when_preferences_missing(monkeypatch):
     """Verifies fallback signer name 'JARVIS User' when user_preferences.json is unavailable."""
     # Point to non-existent path
-    monkeypatch.setattr(everyday_tools, "Path", lambda p: Path("D:\\Jarvis\\non_existent_prefs.json") if "user_preferences.json" in str(p) else Path(p))
+    monkeypatch.setattr(everyday_tools, "user_preferences_file", lambda: PROJECT_ROOT / "non_existent_prefs.json")
 
     res = compose_and_launch_message(
         recipient="partner@corp.net",
@@ -144,7 +146,7 @@ def test_smart_email_topic_extraction_from_body_about():
 
 def test_consumer_documentation_and_launchers_exist():
     """Verifies existence and substantial non-empty content of all release artifacts."""
-    root = Path(r"D:\Jarvis")
+    root = PROJECT_ROOT
 
     user_guide = root / "USER_GUIDE.md"
     assert user_guide.exists(), "USER_GUIDE.md must exist"

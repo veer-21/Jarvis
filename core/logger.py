@@ -16,8 +16,9 @@ from pathlib import Path
 
 
 # ─── Log Directory ───────────────────────────────────────────────────────────
-LOG_DIR = Path(__file__).parent.parent / "logs"
-LOG_DIR.mkdir(parents=True, exist_ok=True)
+from core.paths import logs_dir as _logs_dir
+
+LOG_DIR = _logs_dir()
 
 
 # ─── Custom JSON Formatter ────────────────────────────────────────────────────

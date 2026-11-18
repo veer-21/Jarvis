@@ -109,8 +109,9 @@ def prevent_windows_sleep(enable: bool = True) -> bool:
         return False
 
 # ─── Screenshot Directory ────────────────────────────────────────────────────
-SCREENSHOT_DIR = Path(__file__).parent.parent / "data" / "screenshots"
-SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+from core.paths import screenshots_dir
+
+SCREENSHOT_DIR = screenshots_dir()
 
 
 # ─── Tools ───────────────────────────────────────────────────────────────────

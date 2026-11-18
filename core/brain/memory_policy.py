@@ -59,8 +59,14 @@ class MemoryPolicy:
         text = user_text.strip()
         
         # 1. Check for explicit memory deletion requests
-        if re.search(r"\b(delete|forget|remove)\b.*\b(memory|preference)\b", text, re.I):
+        if re.search(r"\b(delete|forget|remove)\b.*\b(memory|memories|preference|preferences)\b"
+                     r"(?!\s+(?:card|stick|usage|leak|slot|module))", text, re.I):
             return MemoryTier.DO_NOT_STORE, "delete_request"
+
+        # 1b. Credentials are never kept in long-term memory (conversation turns are redacted).
+        from core.security import contains_secret
+        if contains_secret(text):
+            return MemoryTier.DO_NOT_STORE, "sensitive"
 
         # 2. Check for explicit user preferences or permanent facts
         for pattern in cls.PREFERENCE_PATTERNS:

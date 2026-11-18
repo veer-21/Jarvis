@@ -22,6 +22,7 @@ from pathlib import Path
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+import core.paths as _paths  # isolated test data dir
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -48,7 +49,7 @@ def isolate_everyday_test_environment():
         except Exception:
             reminders_bak = None
 
-    todos_file = PROJECT_ROOT / "data" / "tasks" / "personal_todos.json"
+    todos_file = _paths.todos_file()
     todos_bak = None
     if todos_file.exists():
         try:
@@ -57,7 +58,7 @@ def isolate_everyday_test_environment():
         except Exception:
             todos_bak = None
 
-    env_file = PROJECT_ROOT / ".env"
+    env_file = _paths.data_dir() / ".env.fixture-guard"  # tests never touch the real .env
     env_bak = None
     if env_file.exists():
         try:

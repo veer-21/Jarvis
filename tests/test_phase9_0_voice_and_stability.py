@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+import core.paths as _paths  # isolated test data dir
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -36,11 +37,11 @@ from tools.everyday_tools import REMINDERS_FILE
 @pytest.fixture(autouse=True)
 def isolate_phase9_environment():
     """Ensure .env, reminders.json, and personal_todos.json are backed up and restored."""
-    env_file = PROJECT_ROOT / ".env"
+    env_file = _paths.data_dir() / ".env.fixture-guard"  # tests never touch the real .env
     env_bak = env_file.read_text(encoding="utf-8") if env_file.exists() else None
 
     reminders_bak = REMINDERS_FILE.read_text(encoding="utf-8") if REMINDERS_FILE.exists() else None
-    todos_file = PROJECT_ROOT / "data" / "tasks" / "personal_todos.json"
+    todos_file = _paths.todos_file()
     todos_bak = todos_file.read_text(encoding="utf-8") if todos_file.exists() else None
 
     orig_env = dict(os.environ)

@@ -25,80 +25,22 @@ except ImportError:
     HAS_GEMINI = False
     log.warning("google-genai not installed. Run: pip install google-genai")
 
-try:
-    import openai
-    HAS_OPENAI = True
-except ImportError:
-    HAS_OPENAI = False
-    log.warning("openai SDK not installed. Fallback providers will be disabled.")
+from core.brain.llm_providers import (
+    OpenAICompatibleClient, ProviderError, CircuitBreaker, classify_provider_error,
+    RATE_LIMIT, BAD_REQUEST, default_request_timeout, default_max_output_tokens,
+    default_ollama_model, default_openai_model,
+)
 
-class FauxOpenAIClient:
-    def __init__(self, api_key: str, base_url: str):
-        self.api_key = api_key
-        self.base_url = base_url
-        self.chat = self.Chat(self)
+# Fallback providers (Groq / OpenAI / Ollama) all speak the OpenAI-compatible API and are
+# served by our own httpx client, so the optional `openai` SDK is no longer needed.
+HAS_OPENAI = False
 
-    class Chat:
-        def __init__(self, outer):
-            self.outer = outer
-            self.completions = self.Completions(outer)
+# Backward-compatible alias for code/tests that referenced the old ad-hoc client.
+FauxOpenAIClient = OpenAICompatibleClient
 
-        class Completions:
-            def __init__(self, outer):
-                self.outer = outer
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+OPENAI_BASE_URL = "https://api.openai.com/v1"
 
-            def create(self, model: str, messages: list, temperature: float = 0.4, tools: Optional[list] = None, max_tokens: Optional[int] = None, **kwargs):
-                import requests
-                import json
-                headers = {"Content-Type": "application/json"}
-                if self.outer.api_key and self.outer.api_key != "ollama":
-                    headers["Authorization"] = f"Bearer {self.outer.api_key}"
-                
-                payload = {
-                    "model": model,
-                    "messages": messages,
-                    "temperature": temperature,
-                }
-                if tools:
-                    payload["tools"] = tools
-                if max_tokens:
-                    payload["max_tokens"] = max_tokens
-
-                url = self.outer.base_url.rstrip("/") + "/chat/completions"
-                response = requests.post(url, json=payload, headers=headers, timeout=30)
-                if response.status_code >= 400:
-                    raise RuntimeError(f"Groq API error {response.status_code}: {response.text}")
-                data = response.json()
-
-                class FauxResponseChoiceMessage:
-                    def __init__(self, msg_dict):
-                        self.content = msg_dict.get("content")
-                        self.role = msg_dict.get("role", "assistant")
-                        t_calls = msg_dict.get("tool_calls")
-                        if t_calls:
-                            class FauxToolCallFunction:
-                                def __init__(self, tc_func):
-                                    self.name = tc_func.get("name")
-                                    args = tc_func.get("arguments")
-                                    self.arguments = json.dumps(args) if isinstance(args, (dict, list)) else str(args or "{}")
-                            class FauxToolCall:
-                                def __init__(self, tc_dict):
-                                    self.id = tc_dict.get("id")
-                                    self.type = tc_dict.get("type", "function")
-                                    self.function = FauxToolCallFunction(tc_dict.get("function", {}))
-                            self.tool_calls = [FauxToolCall(tc) for tc in t_calls]
-                        else:
-                            self.tool_calls = None
-
-                class FauxResponseChoice:
-                    def __init__(self, choice_dict):
-                        self.message = FauxResponseChoiceMessage(choice_dict.get("message", {}))
-
-                class FauxResponse:
-                    def __init__(self, resp_dict):
-                        self.choices = [FauxResponseChoice(c) for c in resp_dict.get("choices", [])]
-
-                return FauxResponse(data)
 
 class ReasoningEngine:
     """
@@ -122,9 +64,27 @@ class ReasoningEngine:
         self.ollama_host = get_ollama_host()
 
         self.is_offline = os.getenv("JARVIS_OFFLINE") == "1"
+        self.request_timeout = default_request_timeout()
+        self.max_output_tokens = default_max_output_tokens()
+        self.ollama_model = default_ollama_model()
+        self.openai_model = default_openai_model()
+
+        # Per-provider health. A failure opens the breaker for a cool-down, after which the
+        # provider is retried automatically (it is never disabled for the whole session).
+        self._breakers: dict[str, CircuitBreaker] = {
+            name: CircuitBreaker(name) for name in ("gemini", "groq", "openai", "ollama")
+        }
+        self._last_error: Optional[str] = None
 
         if HAS_GEMINI and self._api_key and not self.is_offline:
-            self._client = genai.Client(api_key=self._api_key)
+            try:
+                self._client = genai.Client(
+                    api_key=self._api_key,
+                    http_options=types.HttpOptions(timeout=int(self.request_timeout * 1000)),
+                )
+            except Exception as e:
+                error_log.error(f"Could not create Gemini client: {e}")
+                self._client = None
         else:
             self._client = None
 
@@ -137,12 +97,14 @@ class ReasoningEngine:
         self.primary_engine = get_primary_engine()
         self.groq_model = get_groq_model()
 
+        # Preferred provider from settings (PRIMARY_ENGINE). The *current* provider is derived
+        # from this preference plus live provider health — see the _current_provider property.
         if self.is_offline:
-            self._current_provider = "ollama"
+            self._preferred_provider = "ollama"
         elif self.primary_engine == "groq" and self.groq_key:
-            self._current_provider = "groq"
+            self._preferred_provider = "groq"
         else:
-            self._current_provider = "gemini" if self._client else "fallback"
+            self._preferred_provider = "gemini"
 
         # Phase 3 Hardware Power Budgeting
         self._power_profile: str = "NORMAL"
@@ -154,6 +116,50 @@ class ReasoningEngine:
             pass
 
         log.info(f"ReasoningEngine initialized (Primary: {self._current_provider}, Model: {self._model_name}, Offline: {self.is_offline}, Power: {self._power_profile})")
+
+    # ─── Provider selection ───────────────────────────────────────────────────
+
+    @property
+    def _current_provider(self) -> str:
+        """
+        "gemini"   — Gemini is preferred, configured and healthy.
+        "groq"     — PRIMARY_ENGINE=groq (served through the fallback chain, Groq first).
+        "ollama"   — offline mode.
+        "fallback" — Gemini is preferred but unavailable right now (no client or cooling down).
+        """
+        if self._preferred_provider in ("ollama", "groq"):
+            return self._preferred_provider
+        if self._client is not None and self._breakers["gemini"].allow():
+            return "gemini"
+        return "fallback"
+
+    @_current_provider.setter
+    def _current_provider(self, value: str) -> None:
+        # Kept for backward compatibility with code that assigned this attribute directly.
+        if value == "gemini":
+            self._preferred_provider = "gemini"
+            self._breakers["gemini"].reset()
+        elif value == "fallback":
+            self._breakers["gemini"].trip("manual")
+        elif value in ("groq", "ollama"):
+            self._preferred_provider = value
+
+    def provider_health(self) -> dict:
+        """Snapshot of every provider's availability (for status endpoints and the UI)."""
+        return {
+            "preferred": self._preferred_provider,
+            "current": self._current_provider,
+            "providers": {name: b.snapshot() for name, b in self._breakers.items()},
+        }
+
+    def _record_provider_failure(self, provider: str, error: Any) -> str:
+        kind = classify_provider_error(error)
+        self._last_error = str(error)
+        self._breakers[provider].record_failure(kind, error)
+        if kind != BAD_REQUEST:
+            log.warning(f"[ReasoningEngine] {provider} unavailable ({kind}); retrying it in "
+                        f"{self._breakers[provider].seconds_until_retry():.0f}s. Error: {str(error)[:120]}")
+        return kind
 
     def _make_session_key(self, session_id: Optional[str] = None, user_id: Optional[str] = None) -> str:
         sid = session_id or "default"
@@ -229,13 +235,14 @@ class ReasoningEngine:
                         system_instruction=system_prompt,
                         temperature=0.4,
                         tools=tools,
+                        max_output_tokens=self.max_output_tokens,
                     ),
                 )
-                self._current_provider = "gemini"
+                # NOTE: creating a session must not override PRIMARY_ENGINE or provider health.
                 log.info(f"Chat session created for [{key}] with model: {model}, {len(tools)} tools")
             except Exception as e:
                 error_log.error(f"Failed to create chat session with {model}: {e}")
-                self._current_provider = "fallback"
+                self._record_provider_failure("gemini", e)
 
         self._session_chats[key] = chat
         return chat
@@ -329,9 +336,12 @@ class ReasoningEngine:
                     try:
                         res = client.chat.completions.create(**kwargs)
                     except Exception as e2:
-                        return f"Error: Fallback API call failed after tool strip: {e2}"
+                        # Raise so _fallback_generate can move on to the next provider tier.
+                        raise e2 if isinstance(e2, ProviderError) else ProviderError(
+                            getattr(client, "provider", "fallback"), "error", str(e2)) from e2
                 else:
-                    return f"Error: Fallback API call failed: {e}"
+                    raise e if isinstance(e, ProviderError) else ProviderError(
+                        getattr(client, "provider", "fallback"), "error", error_str) from e
                 
             msg = res.choices[0].message
             
@@ -455,9 +465,6 @@ class ReasoningEngine:
             self._session_histories[key] = history[-6:]
             history = self._session_histories[key]
         
-        # If model name isn't a known ollama model, default to llama3.2
-        ollama_model = self._model_name if self._model_name not in ["gemini-2.0-flash", "gemini-1.5-flash-latest"] else "llama3.2"
-        
         # Ensure system prompt and turns don't blow up token limits for fast fallback models
         sys_prompt = self._system_prompt[:2500] if len(self._system_prompt) > 2500 else self._system_prompt
         messages = [{"role": "system", "content": sys_prompt}]
@@ -471,84 +478,102 @@ class ReasoningEngine:
                 messages.append(turn)
         messages.append({"role": "user", "content": message[:2500]})
 
-        def get_client(api_key, base_url=None):
-            if HAS_OPENAI:
-                return openai.OpenAI(api_key=api_key, base_url=base_url)
-            else:
-                return FauxOpenAIClient(api_key=api_key, base_url=base_url or "https://api.openai.com/v1")
-
-        # Strict Three-Tier Fallback Chain:
-        # Tier 1: Gemini (handled by primary caller, we are in fallback loop now)
-
         had_auth_or_quota_error = False
         api_key_str = str(self._api_key or "")
         if "AIzaSyTestMockKey" in api_key_str or "TestMockKey" in api_key_str:
             had_auth_or_quota_error = True
-        if getattr(self, "_last_error", None):
-            last_err = str(self._last_error)
-            if any(k in last_err for k in ("429", "400", "401", "API_KEY_INVALID", "RESOURCE_EXHAUSTED", "Quota exceeded", "rate limit", "AIzaSyTestMockKey")):
-                had_auth_or_quota_error = True
+        if self._last_error and classify_provider_error(self._last_error) in (RATE_LIMIT, "auth"):
+            had_auth_or_quota_error = True
 
-        # Tier 2: Groq (High-speed Cloud Fallback)
-        if self.groq_key and not self.is_offline:
+        # Fallback chain: Groq → OpenAI → local Ollama. Providers whose circuit breaker is
+        # open (recent failure) are skipped until their cool-down passes.
+        tiers: list[tuple[str, str, str, str]] = []
+        if not self.is_offline:
+            if self.groq_key:
+                tiers.append(("groq", self.groq_key, GROQ_BASE_URL, self.groq_model))
+            if self.openai_key:
+                tiers.append(("openai", self.openai_key, OPENAI_BASE_URL, self.openai_model))
+        if self.ollama_host and self._breakers["ollama"].allow() and self._ollama_reachable():
+            tiers.append(("ollama", "ollama", f"{self.ollama_host.rstrip('/')}/v1", self._ollama_model_name()))
+
+        for provider, provider_key, base_url, model in tiers:
+            breaker = self._breakers[provider]
+            if not breaker.allow():
+                log.debug(f"Skipping {provider}: cooling down for {breaker.seconds_until_retry():.0f}s")
+                continue
+            client = OpenAICompatibleClient(api_key=provider_key, base_url=base_url,
+                                            provider=provider, timeout=self.request_timeout)
             try:
-                client = get_client(self.groq_key, "https://api.groq.com/openai/v1")
-                log.info("Serving via Groq Fallback (Tier 2) with Tools")
-                return self._execute_fallback_with_tools(client, self.groq_model, messages, session_key=key)
+                log.info(f"Serving via {provider} fallback ({model}) with tools")
+                result = self._execute_fallback_with_tools(client, model, messages, session_key=key)
+                breaker.record_success()
+                return result
             except Exception as e:
-                err_str = str(e)
-                if any(k in err_str for k in ("429", "400", "401", "rate_limit", "quota", "invalid_api_key", "Invalid API Key")):
+                kind = self._record_provider_failure(provider, e)
+                if kind in (RATE_LIMIT, "auth"):
                     had_auth_or_quota_error = True
-                log.warning(f"Groq fallback failed: {e}")
+                if provider == "ollama" and self.is_offline:
+                    return (f"Offline Engine Error: Make sure Ollama is running and the model "
+                            f"'{model}' is pulled! Error: {e}")
 
-        # Tier 2.5: OpenAI (Secondary Cloud Fallback)
-        if self.openai_key and not self.is_offline:
+        # When Groq is the primary engine, Gemini is the last cloud resort.
+        if (self._preferred_provider == "groq" and self._client is not None
+                and self._breakers["gemini"].allow()):
             try:
-                client = get_client(self.openai_key)
-                log.info("Serving via OpenAI Fallback (Tier 2.5) with Tools")
-                return self._execute_fallback_with_tools(client, "gpt-4o-mini", messages, session_key=key)
+                text = self._gemini_oneshot(messages)
+                if text:
+                    self._breakers["gemini"].record_success()
+                    history.append({"role": "assistant", "content": text})
+                    return text
             except Exception as e:
-                err_str = str(e)
-                if any(k in err_str for k in ("429", "400", "401", "rate_limit", "quota", "invalid_api_key")):
+                if self._record_provider_failure("gemini", e) in (RATE_LIMIT, "auth"):
                     had_auth_or_quota_error = True
-                log.warning(f"OpenAI fallback failed: {e}")
 
-        # Tier 3: Local Ollama (Tertiary local fallback)
-        # Attempt local Ollama if offline, or if all cloud routes failed/are unconfigured.
-        if self.ollama_host:
-            # Fast 1.5-second socket check before attempting a 30-second completion
-            ollama_reachable = False
-            try:
-                import urllib.parse
-                import socket
-                parsed = urllib.parse.urlparse(self.ollama_host)
-                host = parsed.hostname or "127.0.0.1"
-                port = parsed.port or 11434
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        if had_auth_or_quota_error:
+            return ("⚠️ AI Provider Limit or Invalid API Key: Primary LLM rejected the request "
+                    "(check your GEMINI_API_KEY in Setup Wizard / .env or wait for rate limit reset).")
+
+        return ("Sir, every AI provider is unavailable right now (Gemini, the cloud fallbacks and "
+                "local Ollama). I will retry them automatically in a moment.")
+
+    def _ollama_reachable(self) -> bool:
+        """Fast 1.5-second socket check before attempting a slow completion."""
+        try:
+            import urllib.parse
+            import socket
+            parsed = urllib.parse.urlparse(self.ollama_host or "")
+            host = parsed.hostname or "127.0.0.1"
+            port = parsed.port or 11434
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                 sock.settimeout(1.5)
-                res = sock.connect_ex((host, port))
-                sock.close()
-                ollama_reachable = (res == 0)
-            except Exception as sock_err:
-                log.debug(f"Ollama socket check failed: {sock_err}")
-                ollama_reachable = False
+                return sock.connect_ex((host, port)) == 0
+        except Exception as sock_err:
+            log.debug(f"Ollama socket check failed: {sock_err}")
+            return False
 
-            if ollama_reachable:
-                try:
-                    client = get_client("ollama", f"{self.ollama_host}/v1")
-                    log.info("Serving via Ollama Fallback (Tier 3) with Tools")
-                    return self._execute_fallback_with_tools(client, ollama_model, messages, session_key=key)
-                except Exception as e:
-                    log.warning(f"Ollama fallback failed: {e}")
-                    if self.is_offline:
-                        return f"Offline Engine Error: Make sure Ollama is running and the model '{ollama_model}' is pulled! Error: {e}"
-            else:
-                log.debug("Ollama host is unreachable via fast 1.5s socket check; bypassing Ollama fallback.")
+    def _ollama_model_name(self) -> str:
+        # Never send a Gemini model name to Ollama.
+        if self._model_name and not self._model_name.lower().startswith("gemini") and self.is_offline:
+            return self._model_name
+        return self.ollama_model
 
-        if had_auth_or_quota_error or "AIzaSyTestMockKey" in str(self._api_key or ""):
-            return "⚠️ AI Provider Limit or Invalid API Key: Primary LLM rejected the request (check your GEMINI_API_KEY in Setup Wizard / .env or wait for rate limit reset)."
-
-        return "Sir, we have exhausted all fallback routes (Gemini & Groq) and local Ollama is offline or unconfigured."
+    def _gemini_oneshot(self, messages: list[dict]) -> str:
+        """Single Gemini completion from OpenAI-style messages (no tools, no chat session)."""
+        newline = chr(10)
+        system = newline.join(m["content"] for m in messages if m.get("role") == "system" and m.get("content"))
+        transcript = (newline * 2).join(
+            f"{m['role'].upper()}: {m.get('content', '')}" for m in messages if m.get("role") != "system"
+        )
+        res = self._client.models.generate_content(
+            model=self._model_name,
+            contents=transcript,
+            config=types.GenerateContentConfig(
+                system_instruction=system or None,
+                temperature=0.4,
+                max_output_tokens=self.max_output_tokens,
+            ),
+        )
+        return (getattr(res, "text", None) or "").strip()
 
     def generate_text(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """
@@ -558,17 +583,21 @@ class ReasoningEngine:
         """
         if self._current_provider == "gemini" and self._client:
             try:
-                config = None
-                if system_prompt:
-                    config = types.GenerateContentConfig(system_instruction=system_prompt, temperature=0.2)
+                config = types.GenerateContentConfig(
+                    system_instruction=system_prompt or None,
+                    temperature=0.2,
+                    max_output_tokens=self.max_output_tokens,
+                )
                 res = self._client.models.generate_content(
                     model=self._model_name,
                     contents=prompt,
                     config=config
                 )
+                self._breakers["gemini"].record_success()
                 if res and res.text:
                     return res.text
             except Exception as e:
+                self._record_provider_failure("gemini", e)
                 log.warning(f"Gemini generate_text failed: {e}. Falling back to Groq text completion...")
 
         messages = []
@@ -576,25 +605,25 @@ class ReasoningEngine:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        # Try Groq as a pure, stateless 1-shot chat completion WITHOUT tools and WITHOUT self._session_histories (timeout=10s)
-        if self.groq_key and not self.is_offline:
+        # Groq as a pure, stateless 1-shot completion WITHOUT tools and WITHOUT session history.
+        if self.groq_key and not self.is_offline and self._breakers["groq"].allow():
             try:
                 groq_model = self.groq_model or "llama-3.3-70b-versatile"
-                if HAS_OPENAI:
-                    client = openai.OpenAI(api_key=self.groq_key, base_url="https://api.groq.com/openai/v1", timeout=10.0)
-                else:
-                    client = FauxOpenAIClient(api_key=self.groq_key, base_url="https://api.groq.com/openai/v1")
+                client = OpenAICompatibleClient(api_key=self.groq_key, base_url=GROQ_BASE_URL,
+                                                provider="groq", timeout=min(self.request_timeout, 15.0))
                 token_budget = 1000
                 if self._power_profile == "POWER_SAVER":
                     token_budget = 400
                 elif self._power_profile == "CRITICAL_SAVER":
                     token_budget = 200
                 res = client.chat.completions.create(model=groq_model, messages=messages, temperature=0.2, max_tokens=token_budget)
+                self._breakers["groq"].record_success()
                 if res and res.choices and res.choices[0].message:
                     content = str(res.choices[0].message.content or "")
                     if content.strip():
                         return content
             except Exception as e:
+                self._record_provider_failure("groq", e)
                 log.warning(f"Groq generate_text failed: {e}")
                 return ""
 
@@ -602,6 +631,13 @@ class ReasoningEngine:
         return ""
 
     # ─── Send with Retry ──────────────────────────────────────────────────────
+
+    def _should_retry_gemini(self, error: Any, attempt: int) -> bool:
+        """Only short-lived rate limits are retried in place; everything else falls back now."""
+        text = str(error)
+        return (classify_provider_error(error) == RATE_LIMIT
+                and "GenerateRequestsPerDay" not in text
+                and attempt < self.MAX_RETRIES - 1)
 
     def send_message(
         self,
@@ -613,7 +649,7 @@ class ReasoningEngine:
         raw_msg = raw_message or message
         key = self._make_session_key(session_id, user_id)
         chat = self._session_chats.get(key)
-        if chat is None and self._client:
+        if chat is None and self._client and self._current_provider == "gemini":
             chat = self.create_chat_session(self._system_prompt, self._tools, session_id=session_id, user_id=user_id)
 
         history = self._session_histories.setdefault(key, [])
@@ -623,30 +659,23 @@ class ReasoningEngine:
             for attempt in range(self.MAX_RETRIES):
                 try:
                     response = chat.send_message(message)
+                    self._breakers["gemini"].record_success()
                     self._clean_last_chat_turn(raw_msg, chat=chat)
+                    text = getattr(response, "text", None)
                     history.append({"role": "user", "content": raw_msg})
-                    history.append({"role": "assistant", "content": response.text})
-                    return response.text or "[JARVIS returned an empty response]"
+                    history.append({"role": "assistant", "content": text or ""})
+                    return text or "[JARVIS returned an empty response]"
                 except Exception as e:
-                    error_msg = str(e)
-                    self._last_error = error_msg
-                    is_rate_limit = any(kw in error_msg for kw in ("429", "RESOURCE_EXHAUSTED", "Quota exceeded", "rate limit"))
-                    is_service_error = any(kw in error_msg for kw in ("503", "UNAVAILABLE", "high demand", "Server Error", "400", "INVALID_ARGUMENT", "deadline", "API_KEY_INVALID", "API key not valid"))
-
-                    if "GenerateRequestsPerDay" in error_msg or (is_rate_limit and attempt >= self.MAX_RETRIES - 1) or is_service_error:
-                        log.warning(f"Gemini API unavailable/error ({error_msg[:80]}). Switching to fallback provider.")
-                        self._current_provider = "fallback"
-                        return self._fallback_generate(message, raw_message=raw_msg, session_id=session_id, user_id=user_id)
-
-                    if is_rate_limit:
+                    if self._should_retry_gemini(e, attempt):
+                        self._last_error = str(e)
                         log.warning(f"Rate limit hit (attempt {attempt+1}/{self.MAX_RETRIES}). Retrying in {delay:.1f}s...")
                         time.sleep(delay)
                         delay *= self.BACKOFF_BASE
                         continue
-
-                    error_log.error(f"ReasoningEngine error: {error_msg}. Switching to fallback.")
-                    self._current_provider = "fallback"
+                    # Fall back for THIS request; Gemini is retried after its cool-down.
+                    self._record_provider_failure("gemini", e)
                     return self._fallback_generate(message, raw_message=raw_msg, session_id=session_id, user_id=user_id)
+            return self._fallback_generate(message, raw_message=raw_msg, session_id=session_id, user_id=user_id)
         else:
             return self._fallback_generate(message, raw_message=raw_msg, session_id=session_id, user_id=user_id)
 
@@ -663,19 +692,19 @@ class ReasoningEngine:
         raw_msg = raw_message or message
         key = self._make_session_key(session_id, user_id)
         chat = self._session_chats.get(key)
-        if chat is None and self._client:
+        if chat is None and self._client and self._current_provider == "gemini":
             chat = self.create_chat_session(system_prompt, self._tools, session_id=session_id, user_id=user_id)
 
         history = self._session_histories.setdefault(key, [])
 
-        if self._current_provider in ("fallback", "ollama") or not self._client:
+        if self._current_provider != "gemini" or not self._client:
             yield self._fallback_generate(message, raw_message=raw_msg, session_id=session_id, user_id=user_id)
             return
 
         delay = self.BACKOFF_BASE
         for attempt in range(self.MAX_RETRIES):
+            full_response = ""
             try:
-                full_response = ""
                 if chat:
                     response = chat.send_message_stream(message)
                     for chunk in response:
@@ -690,33 +719,32 @@ class ReasoningEngine:
                         config=types.GenerateContentConfig(
                             system_instruction=system_prompt,
                             temperature=0.4,
+                            max_output_tokens=self.max_output_tokens,
                         ),
                     )
                     for chunk in response:
                         if chunk.text:
                             full_response += chunk.text
                             yield chunk.text
-                
+
+                self._breakers["gemini"].record_success()
                 history.append({"role": "user", "content": raw_msg})
                 history.append({"role": "assistant", "content": full_response})
                 return
             except Exception as e:
-                error_msg = str(e)
-                is_rate_limit = any(kw in error_msg for kw in ("429", "RESOURCE_EXHAUSTED", "Quota exceeded", "rate limit"))
-                
-                if "GenerateRequestsPerDay" in error_msg or (is_rate_limit and attempt >= self.MAX_RETRIES - 1):
-                    log.warning("Gemini daily limit or sustained rate limit hit during streaming. Switching to fallback provider.")
-                    self._current_provider = "fallback"
-                    yield self._fallback_generate(message, raw_message=raw_msg, session_id=session_id, user_id=user_id)
-                    return
-
-                if is_rate_limit:
+                if not full_response and self._should_retry_gemini(e, attempt):
                     time.sleep(delay)
                     delay *= self.BACKOFF_BASE
                     continue
 
-                error_log.error(f"Streaming error: {error_msg}")
-                yield f"\n[Stream Error: {error_msg}]"
+                self._record_provider_failure("gemini", e)
+                if not full_response:
+                    # Nothing reached the user yet: answer this request via the fallback chain.
+                    yield self._fallback_generate(message, raw_message=raw_msg, session_id=session_id, user_id=user_id)
+                    return
+
+                error_log.error(f"Streaming error after partial output: {e}")
+                yield chr(10) + f"[Stream interrupted: {str(e)[:200]}]"
                 return
 
     # ─── Introspection ────────────────────────────────────────────────────────
@@ -725,6 +753,7 @@ class ReasoningEngine:
         return {
             "model": self._model_name,
             "provider": self._current_provider,
+            "provider_health": self.provider_health(),
             "tools_count": len(self._tools),
             "has_session": self._chat is not None,
         }

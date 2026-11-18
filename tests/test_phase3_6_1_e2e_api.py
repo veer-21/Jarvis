@@ -1869,7 +1869,7 @@ def test_phase3_6_8_internal_memory_ownership_and_deletion_safety(api_test_setup
     store_msg = AgentMessage(
         sender="user_368_a",
         recipient="memory",
-        content=f"Internal vault passcode: {passcode_str}",
+        content=f"Internal vault nickname {passcode_str}",  # marker only: credential-looking text is redacted by design
         user_id="user_368_a",
         metadata={"action": "store", "category": "knowledge", "user_id": "user_368_a"}
     )

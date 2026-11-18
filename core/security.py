@@ -38,8 +38,9 @@ except ImportError:
 
 
 # ─── Paths ───────────────────────────────────────────────────────────────────
-SECURITY_DIR  = Path(__file__).parent.parent / "data" / "security"
-SECURITY_DIR.mkdir(parents=True, exist_ok=True)
+from core.paths import security_dir as _security_dir
+
+SECURITY_DIR  = _security_dir()
 PIN_FILE      = SECURITY_DIR / ".owner_pin.hash"
 KEY_FILE      = SECURITY_DIR / ".jarvis.key"
 
@@ -148,6 +149,51 @@ def mask_sensitive_data(data: Any) -> Any:
         if len(data) > 30 and any(prefix in data for prefix in ("sk-", "gsk_", "AIza", "eyJh")):
             return "[MASKED_TOKEN]"
     return data
+
+
+# ─── Secret redaction for free text (memory, conversation history) ───────────
+import re as _re
+
+_SECRET_TOKEN_PATTERNS = [
+    _re.compile(r"\b(?:sk|pk|rk)-[A-Za-z0-9_\-]{16,}"),           # OpenAI / Stripe style keys
+    _re.compile(r"\bgsk_[A-Za-z0-9]{20,}"),                        # Groq
+    _re.compile(r"\bAIza[0-9A-Za-z_\-]{30,}"),                     # Google API keys
+    _re.compile(r"\b(?:ghp|gho|ghu|ghs|github_pat)_[A-Za-z0-9_]{20,}"),  # GitHub tokens
+    _re.compile(r"\bxox[abprs]-[A-Za-z0-9\-]{10,}"),               # Slack tokens
+    _re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{5,}"),  # JWTs
+    _re.compile(r"\b(?:\d[ \-]?){13,19}\b"),                       # payment card numbers
+]
+# "my password is hunter2", "pin: 1234", "api key = abc..." -> keep the label, drop the value
+_SECRET_ASSIGNMENT = _re.compile(
+    r"(?i)\b(password|passcode|passwd|pwd|pin|otp|one[- ]time code|verification code|"
+    r"api[ _-]?key|secret|access[ _-]?token|auth[ _-]?token|private key)"
+    r"(\s*(?:is|=|:|was)\s*)(\S+)"
+)
+
+
+def redact_secrets(text: str) -> tuple[str, bool]:
+    """
+    Remove credentials from free text before it is stored or logged.
+    Returns (redacted_text, found_any_secret).
+    """
+    if not text:
+        return text, False
+    found = False
+
+    def _assign(m):
+        nonlocal found
+        found = True
+        return f"{m.group(1)}{m.group(2)}[REDACTED]"
+
+    out = _SECRET_ASSIGNMENT.sub(_assign, text)
+    for pattern in _SECRET_TOKEN_PATTERNS:
+        out, n = pattern.subn("[REDACTED]", out)
+        found = found or n > 0
+    return out, found
+
+
+def contains_secret(text: str) -> bool:
+    return redact_secrets(text)[1]
 
 
 # ─── Dangerous Action Registry ────────────────────────────────────────────────

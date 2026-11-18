@@ -96,6 +96,8 @@ class AssistantOrchestrator:
     recovery, streaming, and persistent memory boundaries.
     """
 
+    MAX_EXECUTION_HISTORY = 200
+
     def __init__(self, brain=None, tool_router=None, memory_manager=None, reasoning_engine=None):
         self.brain = brain
         self.tool_router = tool_router or (brain.tools if brain else None)
@@ -108,7 +110,7 @@ class AssistantOrchestrator:
         self._request_active_tasks: dict[str, AssistantTask] = {}  # keyed by request_id
         self._fallback_active_task: Optional[AssistantTask] = None
         self._execution_history: list[AssistantTask] = []
-        
+
         log.info("AssistantOrchestrator online (Phase 3.5 Hardened).")
 
     def _register_active_task(self, task: AssistantTask, ctx: Optional[Any] = None) -> None:
@@ -360,6 +362,9 @@ class AssistantOrchestrator:
 
             task_store.save_task(task)
             self._execution_history.append(task)
+            if len(self._execution_history) > self.MAX_EXECUTION_HISTORY:
+                # Bounded in-memory history (full history is persisted by task_store).
+                del self._execution_history[: -self.MAX_EXECUTION_HISTORY]
             if task.status not in (TaskStatus.WAITING_FOR_INPUT, TaskStatus.WAITING_FOR_CONFIRMATION):
                 self._unregister_active_task(task)
             self.context_tracker.set_active_task(None)
@@ -425,7 +430,8 @@ class AssistantOrchestrator:
                     yield "I cannot delete memories without verified user identity, Sir."
                     return
                 if self.memory_manager and query:
-                    success = self.memory_manager.delete_memory(query=query, user_id=caller_user)
+                    # Memory I/O is blocking: keep it off the event loop.
+                    success = await asyncio.to_thread(self.memory_manager.delete_memory, query=query, user_id=caller_user)
                     if success:
                         yield "Understood, Sir. I have deleted that information from memory."
                     else:
@@ -466,7 +472,8 @@ class AssistantOrchestrator:
             self.context_tracker.set_active_task(task.task_id)
 
             # If it's a conversational chat without multi-step tools, stream tokens directly
-            plan_steps = self._create_plan(raw_text, "chat")
+            # Planning may call the LLM (blocking HTTP): run it in a worker thread.
+            plan_steps = await asyncio.to_thread(self._create_plan, raw_text, "chat")
             is_multi_step_tool = any(s.tool_name for s in plan_steps)
 
             if not is_multi_step_tool:
@@ -528,7 +535,7 @@ class AssistantOrchestrator:
                     elif is_cleanly_completed or (context is None and not is_interrupted and not stream_error):
                         task.result = full_answer
                         task.transition_to(TaskStatus.COMPLETED)
-                        self._handle_memory_persistence(task, full_answer, execution_context=context)
+                        await asyncio.to_thread(self._handle_memory_persistence, task, full_answer, execution_context=context)
                         task_store.save_task(task)
                         self._unregister_active_task(task)
                         self.context_tracker.set_active_task(None)
@@ -1314,7 +1321,12 @@ JSON:"""
 
                 # Reasoning step
                 if step.capability == "reasoning" or not step.tool_name:
-                    step_res = self._execute_reasoning_step(step, step_outputs, resolved_input)
+                    if self._is_conversational_plan(task) and self._can_converse():
+                        # Plain chat: answer through the configured chat session (persona,
+                        # memory context, conversation history and safe tools).
+                        step_res = self._converse(resolved_input, task)
+                    else:
+                        step_res = self._execute_reasoning_step(step, step_outputs, resolved_input)
                     if step_res.get("success"):
                         step.status = TaskStepStatus.COMPLETED
                         step.result = step_res.get("output")
@@ -1490,33 +1502,90 @@ JSON:"""
 
         return None
 
+    # ─── Conversational path ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _is_conversational_plan(task: AssistantTask) -> bool:
+        """True for the single-step 'just talk to the user' plan (no tools involved)."""
+        plan = getattr(task, "plan", None) or []
+        return (len(plan) == 1 and plan[0].capability == "reasoning"
+                and not plan[0].tool_name)
+
+    def _can_converse(self) -> bool:
+        reasoning = getattr(self.brain, "reasoning", None) if self.brain is not None else None
+        return reasoning is not None and hasattr(reasoning, "send_message")
+
+    @staticmethod
+    def _run_coro_sync(coro, timeout: float = 15.0):
+        """
+        Run a coroutine to completion from synchronous code without ever blocking the event
+        loop it may belong to (the old run_coroutine_threadsafe(...).result() call deadlocked
+        when invoked on the loop's own thread).
+        """
+        import asyncio as _asyncio
+        try:
+            _asyncio.get_running_loop()
+        except RuntimeError:
+            return _asyncio.run(coro)          # no loop in this thread: run directly
+        # A loop is running in this thread: execute on a short-lived helper thread.
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(_asyncio.run, coro).result(timeout=timeout)
+
+    def _enrich_prompt_sync(self, user_request: str, session_id: Optional[str], user_id: Optional[str]) -> str:
+        """Add memory context / recent conversation to the user's message (best effort)."""
+        context_mgr = getattr(self.brain, "context", None) if self.brain is not None else None
+        if context_mgr is None or not hasattr(context_mgr, "build_enriched_prompt"):
+            return user_request
+
+        async def _enrich():
+            try:
+                return await context_mgr.build_enriched_prompt(
+                    user_request, session_id=session_id, user_id=user_id
+                )
+            except TypeError:
+                return await context_mgr.build_enriched_prompt(user_request)
+
+        try:
+            enriched = self._run_coro_sync(_enrich())
+            return enriched or user_request
+        except Exception as e:
+            log.warning(f"[Orchestrator] Prompt enrichment skipped: {e}")
+            return user_request
+
+    def _converse(self, user_request: str, task: AssistantTask) -> dict:
+        """Answer a conversational request through the brain's chat session."""
+        session_id = getattr(task, "session_id", None)
+        user_id = getattr(task, "user_id", None)
+        enriched = self._enrich_prompt_sync(user_request, session_id, user_id)
+        reasoning = self.brain.reasoning
+        try:
+            try:
+                raw = reasoning.send_message(enriched, raw_message=user_request,
+                                             session_id=session_id, user_id=user_id)
+            except TypeError:
+                # Older/simple engines without per-session support.
+                raw = reasoning.send_message(enriched, raw_message=user_request)
+        except Exception as e:
+            error_log.error(f"[Orchestrator] Conversational reply failed: {e}")
+            return {"success": False, "error": f"I could not reach the language model: {e}"}
+
+        response = raw
+        formatter = getattr(self.brain, "response", None)
+        if formatter is not None and hasattr(formatter, "format_response"):
+            try:
+                response = formatter.format_response(raw)
+            except Exception:
+                response = raw
+        return {"success": True, "output": str(response)}
+
     def _generate_final_response(self, user_request: str, task: AssistantTask, step_outputs: dict) -> str:
         """Compose the final natural-language response."""
         if not step_outputs:
             session_id = getattr(task, "session_id", None)
             user_id = getattr(task, "user_id", None)
             if self.brain and hasattr(self.brain, "context") and hasattr(self.brain, "reasoning"):
-                try:
-                    import asyncio as _asyncio
-                    try:
-                        loop = _asyncio.get_event_loop()
-                    except RuntimeError:
-                        loop = _asyncio.new_event_loop()
-                        _asyncio.set_event_loop(loop)
-                    async def _enrich():
-                        try:
-                            return await self.brain.context.build_enriched_prompt(
-                                user_request, session_id=session_id, user_id=user_id
-                            )
-                        except TypeError:
-                            return await self.brain.context.build_enriched_prompt(user_request)
-
-                    if loop.is_running():
-                        enriched = _asyncio.run_coroutine_threadsafe(_enrich(), loop).result()
-                    else:
-                        enriched = loop.run_until_complete(_enrich())
-                except Exception:
-                    enriched = user_request
+                enriched = self._enrich_prompt_sync(user_request, session_id, user_id)
                 raw_res = self.brain.reasoning.send_message(
                     enriched, raw_message=user_request, session_id=session_id, user_id=user_id
                 )

@@ -83,8 +83,10 @@ class ComposeAndLaunchMessageArgs(BaseModel):
 
 # ─── Global State & Persistence Paths ─────────────────────────────────────────
 
-REMINDERS_FILE = Path(r"D:\Jarvis\data\tasks\reminders.json")
-PERSONAL_TODOS_FILE = Path(r"D:\Jarvis\data\tasks\personal_todos.json")
+from core.paths import reminders_file, todos_file, user_preferences_file
+
+REMINDERS_FILE = reminders_file()
+PERSONAL_TODOS_FILE = todos_file()
 _active_timer_threads: Dict[str, threading.Timer] = {}
 _reminders_lock = threading.Lock()
 _todos_lock = threading.Lock()
@@ -119,7 +121,8 @@ def _resolve_user_directory(dir_name_or_path: str) -> Path:
     expanded = os.path.expandvars(os.path.expanduser(raw))
     p = Path(expanded)
     if not p.is_absolute():
-        p = Path(r"D:\Jarvis") / p
+        # Relative folders are interpreted inside the user's home, not the install folder.
+        p = Path.home() / p
     return p
 
 
@@ -689,7 +692,7 @@ def summarize_local_document(file_path: str, focus_query: Optional[str] = None) 
 
     # If relative, check common user locations
     if not target_path.exists():
-        for base in [Path(r"D:\Jarvis"), Path.home() / "Desktop", Path.home() / "Downloads", Path.home() / "Documents"]:
+        for base in [Path.home() / "Desktop", Path.home() / "Downloads", Path.home() / "Documents", Path.home()]:
             cand = base / raw_path
             if cand.exists() and cand.is_file():
                 target_path = cand
@@ -765,7 +768,7 @@ def generate_daily_briefing(city: str = "auto") -> Dict[str, Any]:
     # Read user preferences if available
     user_name = "Sir"
     resolved_city = city
-    prefs_file = Path(r"D:\Jarvis\data\user_preferences.json")
+    prefs_file = user_preferences_file()
     if prefs_file.exists():
         try:
             with open(prefs_file, "r", encoding="utf-8") as f:
@@ -1195,7 +1198,7 @@ def compose_and_launch_message(
     if not clean_body or is_command:
         # 1. Read user_name from user_preferences.json if available
         signer_name = "JARVIS User"
-        prefs_file = Path(r"D:\Jarvis\data\user_preferences.json")
+        prefs_file = user_preferences_file()
         if prefs_file.exists():
             try:
                 with open(prefs_file, "r", encoding="utf-8") as f:

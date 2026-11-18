@@ -28,8 +28,9 @@ except ImportError:
     log.warning("playwright not installed — browser automation disabled. Run: pip install playwright && playwright install chromium")
 
 
-SCREENSHOT_DIR = Path(__file__).parent.parent / "data" / "screenshots"
-SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+from core.paths import screenshots_dir
+
+SCREENSHOT_DIR = screenshots_dir()
 
 # ─── Browser State (singleton) ────────────────────────────────────────────────
 _playwright_instance = None

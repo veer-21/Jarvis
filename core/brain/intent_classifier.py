@@ -58,8 +58,11 @@ class IntentClassifier:
             (re.compile(r"^(?:close|kill|stop|quit|exit)\s+(.+)$", re.IGNORECASE),
              "execute_command", self._extract_close_app),
 
-            # Web search
-            (re.compile(r"^(?:search (?:google |the web )?for|search (?:google|the web)|search for|search|google)\s+(.+)$", re.IGNORECASE),
+            # Web search shortcut (opens a results page in the browser). Only for EXPLICIT,
+            # single-step web searches: "search my files for X" or "search the web for X and
+            # summarize it" must go to the planner instead of blindly opening Google.
+            (re.compile(r"^(?:search (?:google|the web|online|the internet)(?: for)?|google)\s+"
+                        r"((?:(?!\b(?:and|then)\b).)+)$", re.IGNORECASE),
              "_open_url_local", self._extract_search),
 
             # Type text
@@ -280,7 +283,7 @@ class IntentClassifier:
         if action == "write":
             words = set(re.findall(r"\b[a-zA-Z]+\b", content.lower()))
             if words & gen_keywords or content.lower().startswith(("a ", "an ", "the ", "some ", "me ")):
-                # Return None so it falls through to LLM / GoalExecutor
+                # Return None so it falls through to the orchestrator planner / LLM
                 return None
 
         # If action is 'type', also check if words look like a request to write code

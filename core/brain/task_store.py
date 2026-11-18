@@ -17,8 +17,10 @@ class TaskStore:
     Saves to data/tasks/task_history.json.
     """
 
-    def __init__(self, storage_path: str = "data/tasks/task_history.json"):
-        self.storage_path = Path(storage_path)
+    def __init__(self, storage_path: Optional[str] = None):
+        from core.paths import task_history_file
+        # Anchored to the JARVIS data directory, not the current working directory.
+        self.storage_path = Path(storage_path) if storage_path else task_history_file()
         self._lock = threading.Lock()
         self._ensure_storage()
 

@@ -3,14 +3,20 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+def _secret(name: str, *aliases: str):
+    # Windows Credential Manager first, then environment / .env (see core/secrets_store.py).
+    from core.secrets_store import resolve
+    return resolve(name, *aliases)
+
+
 def get_api_key():
-    return os.environ.get("GEMINI_API_KEY")
+    return _secret("GEMINI_API_KEY", "GOOGLE_API_KEY")
 
 def get_groq_api_key():
-    return os.environ.get("GROQ_API_KEY")
+    return _secret("GROQ_API_KEY")
 
 def get_openai_api_key():
-    return os.environ.get("OPENAI_API_KEY")
+    return _secret("OPENAI_API_KEY")
 
 def get_ollama_host():
     return os.environ.get("OLLAMA_HOST")

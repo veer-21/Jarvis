@@ -39,8 +39,9 @@ except ImportError:
     log.warning("ChromaDB not installed — using JSON fallback memory. Run: pip install chromadb")
 
 # ─── Paths ───────────────────────────────────────────────────────────────────
-MEMORY_DIR = Path(__file__).parent.parent / "data" / "memory"
-MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+from core.paths import memory_dir as _memory_dir
+
+MEMORY_DIR = _memory_dir()
 CHROMA_DIR  = MEMORY_DIR / "chroma"
 JSON_STORE  = MEMORY_DIR / "memory_fallback.json"
 CONVO_STORE = MEMORY_DIR / "conversations.json"
@@ -59,12 +60,68 @@ if HAS_CHROMA:
         log.warning(f"Early Chroma client init skipped: {_ce}")
 
 
+# ─── Keyword relevance for the JSON fallback store ───────────────────────────
+_STOPWORDS = {
+    "the", "and", "for", "you", "your", "are", "was", "what", "who", "how", "why", "when",
+    "where", "that", "this", "with", "from", "have", "has", "had", "about", "into", "please",
+    "can", "could", "would", "should", "will", "just", "tell", "me", "my", "mine", "our",
+    "is", "it", "of", "to", "in", "on", "at", "a", "an", "do", "does", "did", "remember",
+}
+
+
+def _tokens(text: str) -> set:
+    import re as _re_tokens
+    return {t for t in _re_tokens.findall(r"[a-z0-9]+", text.lower())
+            if len(t) > 2 and t not in _STOPWORDS}
+
+
+def _neg_ts(ts: str) -> str:
+    # Sort helper: invert ISO timestamps so newer entries come first in an ascending sort.
+    return "".join(chr(0x10FFFF - ord(c)) for c in ts) if ts else ""
+
+
+# ─── Crash-safe JSON persistence ─────────────────────────────────────────────
+import threading as _threading
+_JSON_IO_LOCK = _threading.RLock()
+
+
+def _safe_load_json(path: Path, default):
+    """
+    Load a JSON store. A corrupt file is moved aside (never silently replaced by an empty
+    store, which used to wipe all memories on the next save) and an empty store is returned.
+    """
+    if not path.exists():
+        return default
+    try:
+        with _JSON_IO_LOCK:
+            return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        backup = path.with_name(f"{path.name}.corrupt-{stamp}")
+        try:
+            path.replace(backup)
+            log.error(f"Memory store {path.name} was unreadable ({e}); preserved as {backup.name} and starting fresh.")
+        except Exception as move_err:
+            log.error(f"Memory store {path.name} is unreadable ({e}) and could not be moved aside: {move_err}")
+        return default
+
+
+def _atomic_write_json(path: Path, data) -> None:
+    """Write via a temp file + atomic rename so a crash mid-write cannot corrupt the store."""
+    payload = json.dumps(data, indent=2, ensure_ascii=False)
+    tmp = path.with_name(f".{path.name}.tmp")
+    with _JSON_IO_LOCK:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(payload, encoding="utf-8")
+        os.replace(tmp, path)
+
+
 # ─── Memory Importance Scoring ────────────────────────────────────────────────
 
 # Keywords that indicate a memory is worth storing long-term
 _IMPORTANCE_KEYWORDS = {
     "prefer", "always", "never", "remember", "my name", "i like", "i hate",
-    "i want", "i need", "important", "favorite", "password", "key",
+    "i want", "i need", "important", "favorite",
     "setting", "config", "schedule", "workflow", "automate", "save",
     "don't forget", "note that", "keep in mind", "fyi",
 }
@@ -123,15 +180,11 @@ class JSONMemoryStore:
         self._data: dict = self._load()
 
     def _load(self) -> dict:
-        if self._path.exists():
-            try:
-                return json.loads(self._path.read_text(encoding="utf-8"))
-            except Exception:
-                return {}
-        return {}
+        data = _safe_load_json(self._path, {})
+        return data if isinstance(data, dict) else {}
 
     def _save(self) -> None:
-        self._path.write_text(json.dumps(self._data, indent=2, ensure_ascii=False), encoding="utf-8")
+        _atomic_write_json(self._path, self._data)
 
     def add(self, doc_id: str, content: str, metadata: dict) -> None:
         self._data[doc_id] = {
@@ -148,11 +201,7 @@ class JSONMemoryStore:
 
         query_lower = query.lower()
         results = []
-        import re
-        try:
-            pattern = re.compile(rf"\b{re.escape(query_lower)}\b")
-        except:
-            pattern = None
+        query_tokens = _tokens(query_lower)
 
         for doc_id, entry in self._data.items():
             meta = entry.get("metadata", {})
@@ -166,16 +215,20 @@ class JSONMemoryStore:
             if category and meta.get("category") != category:
                 continue
             
-            content_lower = entry["content"].lower()
-            if pattern:
-                if pattern.search(content_lower):
-                    results.append({"id": doc_id, **entry})
+            content_lower = str(entry.get("content", "")).lower()
+            # Token-overlap relevance (the old whole-phrase regex almost never matched a
+            # natural-language query). distance follows Chroma's convention: 0 = identical.
+            if query_lower and query_lower in content_lower:
+                overlap = 1.0
+            elif query_tokens:
+                overlap = len(query_tokens & _tokens(content_lower)) / len(query_tokens)
             else:
-                if query_lower in content_lower:
-                    results.append({"id": doc_id, **entry})
-                    
-        # Return most recent matches up to top_k
-        results.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+                overlap = 0.0
+            if overlap > 0:
+                results.append({"id": doc_id, **entry, "distance": round(1.0 - overlap, 3)})
+
+        # Best matches first, newest first among equals
+        results.sort(key=lambda x: (x["distance"], _neg_ts(x.get("timestamp", ""))))
         return results[:top_k]
 
     def get(self, doc_id: str, user_id: Optional[str] = None, allow_system_scope: bool = False) -> Optional[dict]:
@@ -260,17 +313,11 @@ class ConversationStore:
         self._turns: list[dict] = self._load()
 
     def _load(self) -> list:
-        if self._path.exists():
-            try:
-                return json.loads(self._path.read_text(encoding="utf-8"))
-            except Exception:
-                return []
-        return []
+        data = _safe_load_json(self._path, [])
+        return data if isinstance(data, list) else []
 
     def _save(self) -> None:
-        self._path.write_text(
-            json.dumps(self._turns, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        _atomic_write_json(self._path, self._turns)
 
     def add_turn(
         self,
@@ -280,7 +327,9 @@ class ConversationStore:
         user_id: Optional[str] = None,
         metadata: Optional[dict] = None,
     ) -> None:
-        """Add a conversation turn. Role is 'user' or 'assistant'."""
+        """Add a conversation turn. Role is 'user' or 'assistant'. Credentials are redacted."""
+        from core.security import redact_secrets
+        content, _ = redact_secrets(content or "")
         turn = {
             "role": role,
             "content": content,
@@ -396,17 +445,11 @@ class EpisodicMemory:
         self._last_summarized_index = 0  # Track which turns have been summarized
 
     def _load(self) -> list:
-        if self._path.exists():
-            try:
-                return json.loads(self._path.read_text(encoding="utf-8"))
-            except Exception:
-                return []
-        return []
+        data = _safe_load_json(self._path, [])
+        return data if isinstance(data, list) else []
 
     def _save(self) -> None:
-        self._path.write_text(
-            json.dumps(self._episodes, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        _atomic_write_json(self._path, self._episodes)
 
     def add_episode(self, summary: str, metadata: Optional[dict] = None, user_id: Optional[str] = None, session_id: Optional[str] = None) -> None:
         """Store an episode summary with explicit owner and session tags (P0-2)."""
@@ -640,13 +683,18 @@ class JarvisMemory:
             category = "knowledge"
 
         doc_id = str(uuid.uuid4())
+        if not encrypt:
+            # Plain-text memories never keep credentials.
+            from core.security import redact_secrets
+            content, _ = redact_secrets(content)
         stored_content = encryption.encrypt(content) if encrypt else content
 
+        # System fields are applied last so caller metadata cannot spoof them.
         meta = {
+            **(metadata or {}),
             "category":  category,
             "encrypted": str(encrypt),
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            **(metadata or {}),
         }
         if user_id:
             meta["user_id"] = user_id
@@ -771,7 +819,8 @@ class JarvisMemory:
 
         # JSON fallback
         raw = self._json_store.search(query, top_k=top_k, category=category, user_id=user_id, allow_system_scope=allow_system_scope)
-        return [{"id": r["id"], "content": r["content"], "metadata": r["metadata"], "distance": 0.5} for r in raw]
+        return [{"id": r["id"], "content": r["content"], "metadata": r["metadata"],
+                 "distance": r.get("distance", 0.5)} for r in raw]
 
     def get_preference(self, key: str, user_id: Optional[str] = None, allow_system_scope: bool = False) -> Optional[str]:
         """Retrieve a stored preference by key (checks cache first) for a specific user (P0-1, P0-2, P1-5)."""
@@ -856,6 +905,12 @@ class JarvisMemory:
         Raw turns are NO LONGER auto-mirrored to long-term memory.
         """
         self.conversations.add_turn(role, content, session_id=session_id, user_id=user_id)
+
+        # Never keep credentials in long-term memory, however "important" the message looks.
+        from core.security import contains_secret
+        if contains_secret(content):
+            log.info("Message contains credentials; kept out of long-term memory.")
+            return
 
         # Only store genuinely important user messages in long-term memory
         importance = score_importance(content, role)
