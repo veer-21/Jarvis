@@ -71,8 +71,9 @@ def {clean_name}(payload: str = "default") -> dict:
         from core.brain.tool_router import ToolRouter
         router = ToolRouter()
 
-    target_custom_dir = custom_dir if custom_dir is not None else (Path("tools") / "custom")
-    target_quarantine_dir = quarantine_dir if quarantine_dir is not None else (target_custom_dir / "_quarantine")
+    from core.brain.custom_tool_pipeline import DEFAULT_CUSTOM_DIR, QUARANTINE_DIRNAME
+    target_custom_dir = Path(custom_dir) if custom_dir is not None else DEFAULT_CUSTOM_DIR
+    target_quarantine_dir = Path(quarantine_dir) if quarantine_dir is not None else (target_custom_dir / QUARANTINE_DIRNAME)
 
     ok, report = process_and_register_generated_tool(
         source_code=code_to_use,
@@ -111,7 +112,8 @@ class RefinerAgent(BaseAgent):
     def __init__(self, brain=None):
         super().__init__(name="refiner", role=AgentRole.TOOL)
         self.brain = brain
-        self.custom_tools_dir = os.path.join("tools", "custom")
+        from core.brain.custom_tool_pipeline import DEFAULT_CUSTOM_DIR
+        self.custom_tools_dir = str(DEFAULT_CUSTOM_DIR)
 
     def process(self, message: AgentMessage) -> AgentResponse:
         """

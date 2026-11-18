@@ -330,7 +330,7 @@ def graphify_query(question: str) -> str:
     """
     graph_path = Path(__file__).parent.parent / "graphify-out" / "graph.json"
     if not graph_path.exists():
-        return "Graphify knowledge graph not found. Run python build_graphify.py first."
+        return "Graphify knowledge graph not found. Run python scripts/build_graphify.py first."
 
     try:
         data = json.loads(graph_path.read_text(encoding="utf-8"))

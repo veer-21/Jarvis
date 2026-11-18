@@ -10,7 +10,8 @@ from typing import Optional, Callable, Any
 from enum import Enum
 
 from core.logger import log, error_log
-from core.security import guard, RiskLevel
+from core.security import guard, RiskLevel, UNTRUSTED_SOURCE_TOOLS
+from core.brain.task_model import current_turn_security
 from core.brain.tool_contract import ToolContract, ToolExecutionResult, ConfirmationPolicy, RetryPolicy
 from core.brain.verifier import ResultVerifier
 
@@ -277,18 +278,19 @@ class ToolRouter:
         log.info(f"Registered {count} tools from module category: {category}")
         return count
 
-    def load_custom_tools(self, custom_tools_dir: str = "tools/custom") -> int:
+    def load_custom_tools(self, custom_tools_dir: Optional[str] = None) -> int:
         """Dynamically load and register python scripts from tools/custom/ after multi-stage validation."""
         import os
         import importlib.util
         from pathlib import Path
-        from core.brain.custom_tool_pipeline import validate_tool_source
-        
-        custom_dir = Path(custom_tools_dir)
+        from core.brain.custom_tool_pipeline import validate_tool_source, DEFAULT_CUSTOM_DIR, QUARANTINE_DIRNAME
+
+        # Anchored to the project, not the current working directory.
+        custom_dir = Path(custom_tools_dir) if custom_tools_dir else DEFAULT_CUSTOM_DIR
         if not custom_dir.exists():
             return 0
-            
-        quarantine_dir = custom_dir / "_quarantine"
+
+        quarantine_dir = custom_dir / QUARANTINE_DIRNAME
         quarantine_dir.mkdir(parents=True, exist_ok=True)
         count = 0
 
@@ -320,6 +322,7 @@ class ToolRouter:
             spec = importlib.util.spec_from_file_location(module_name, py_file)
             if spec and spec.loader:
                 try:
+                    names_before = set(self._registry)
                     module = importlib.util.module_from_spec(spec)
                     spec.loader.exec_module(module)
                     # Check for @jarvis_tool decorated tools first
@@ -333,6 +336,12 @@ class ToolRouter:
                             if not attr_name.startswith("_"):
                                 overrides[attr_name] = RiskLevel.HIGH
                         count += self.register_tools_from_module(module, category="custom", risk_overrides=overrides)
+
+                    # LLM-generated code declares its own risk level in its decorator, so that
+                    # declaration cannot be trusted: every generated tool asks the owner before
+                    # each run until it has been reviewed (and the flag cleared deliberately).
+                    for new_name in set(self._registry) - names_before:
+                        self._registry[new_name].requires_confirmation = True
                 except Exception as e:
                     error_log.error(f"Failed to load validated custom tool {py_file.name}: {e}")
                     
@@ -458,6 +467,7 @@ class ToolRouter:
             declared_risk=schema.risk_level,
             interactive=interactive,
             declared_requires_confirmation=schema.requires_confirmation,
+            untrusted_context=bool((current_turn_security.get() or {}).get("untrusted_content_seen")),
         )
         if not allowed:
             log.warning(f"Tool '{name}' blocked: {reason}")
@@ -568,6 +578,14 @@ class ToolRouter:
 
             elapsed_ms = (time.perf_counter() - t_start) * 1000.0
             result_summary = str(result)[:200]
+
+            # Internet content can carry prompt-injection instructions: from here on in this
+            # request, state-changing / data-egress tools need the owner's confirmation.
+            if name in UNTRUSTED_SOURCE_TOOLS:
+                turn_sec = current_turn_security.get()
+                if turn_sec is not None:
+                    turn_sec["untrusted_content_seen"] = True
+                    turn_sec["untrusted_sources"].append(name)
 
             # 5. Deterministic post-condition verification
             ver_res = ResultVerifier.verify_tool_result(name, args, result)

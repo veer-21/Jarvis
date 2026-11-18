@@ -16,6 +16,15 @@ from core.security import mask_sensitive_data
 
 current_execution_context: contextvars.ContextVar[Optional['ExecutionContext']] = contextvars.ContextVar('current_execution_context', default=None)
 
+# Per-request security state. Holds a *mutable* dict so that tool calls running in copied
+# contexts (threads, asyncio.to_thread, SDK tool callbacks) all update the same request state.
+#   {"untrusted_content_seen": bool, "untrusted_sources": list[str]}
+current_turn_security: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar('current_turn_security', default=None)
+
+
+def new_turn_security_state() -> dict:
+    return {"untrusted_content_seen": False, "untrusted_sources": []}
+
 class TaskStatus(str, Enum):
     RECEIVED                 = "RECEIVED"
     UNDERSTANDING            = "UNDERSTANDING"

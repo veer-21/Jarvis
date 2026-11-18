@@ -97,6 +97,39 @@ def hard_block_reason(command: str) -> Optional[str]:
     return None
 
 
+# ─── Untrusted-content (prompt injection) policy ─────────────────────────────
+# Tools whose output is attacker-controllable text from the internet. Once any of these has
+# returned content in a request, the model's next decisions may be driven by a malicious page.
+UNTRUSTED_SOURCE_TOOLS = {
+    "web_search", "search_news", "fetch_webpage", "open_url", "get_page_text",
+    "read_and_summarize_webpage",
+}
+# Tools that send a URL to the internet; data can be smuggled out inside that URL.
+URL_EGRESS_TOOLS = {"fetch_webpage", "open_url", "get_page_text", "read_and_summarize_webpage"}
+
+
+def looks_like_exfiltration_url(url: str) -> bool:
+    """Heuristic: does this URL carry a payload big enough to smuggle data out?"""
+    from urllib.parse import urlsplit
+    try:
+        parts = urlsplit(str(url or ""))
+    except Exception:
+        return True
+    return len(parts.query) > 64 or len(parts.fragment) > 64 or len(parts.path) > 200
+
+
+def untrusted_context_requires_confirmation(tool_name: str, args: dict, effective_risk: "RiskLevel") -> bool:
+    """
+    After untrusted web content entered the request, any action that changes something
+    (risk above READ_ONLY) or that could carry data out through a URL needs the owner's OK.
+    """
+    if effective_risk != RiskLevel.READ_ONLY:
+        return True
+    if tool_name in URL_EGRESS_TOOLS:
+        return looks_like_exfiltration_url((args or {}).get("url", ""))
+    return False
+
+
 def mask_sensitive_data(data: Any) -> Any:
     """Recursively mask secrets, passwords, tokens, and keys from logs and events."""
     if isinstance(data, dict):
@@ -552,6 +585,7 @@ class SecurityGuard:
         declared_risk: RiskLevel = RiskLevel.READ_ONLY,
         interactive: bool = True,
         declared_requires_confirmation: bool = False,
+        untrusted_context: bool = False,
     ) -> tuple[bool, RiskLevel, bool, str]:
         """
         Unified Single Policy Decision Point for EVERY tool execution.
@@ -637,6 +671,16 @@ class SecurityGuard:
             effective_risk in (RiskLevel.HIGH_RISK, RiskLevel.CRITICAL)
             or bool(declared_requires_confirmation)
         )
+        if (untrusted_context and not requires_confirmation
+                and untrusted_context_requires_confirmation(tool_name, args, effective_risk)):
+            requires_confirmation = True
+            audit_log.warning({
+                "event": "UNTRUSTED_CONTEXT_CONFIRMATION_REQUIRED",
+                "tool": tool_name,
+                "risk": effective_risk,
+                "args": mask_sensitive_data(args),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
 
         # Protected Critical Windows Processes - never allow terminating them
         if "command" in args and isinstance(args["command"], str):

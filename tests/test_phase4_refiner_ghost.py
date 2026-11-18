@@ -286,8 +286,14 @@ def calc_kinetic_energy(mass: float, velocity: float) -> float:
         assert (custom_dir / "calc_kinetic_energy.py").exists()
         assert not (quarantine_dir / "quarantine_*").exists()
 
-        # Execute through router without restart
-        res = router.execute_tool("calc_kinetic_energy", {"mass": 10.0, "velocity": 2.0}, interactive=False)
+        # Hot-reloaded without restart, but an unreviewed generated tool never runs unattended
+        blocked = router.execute_tool("calc_kinetic_energy", {"mass": 10.0, "velocity": 2.0}, interactive=False)
+        assert blocked.status == "BLOCKED"
+
+        # After the owner approves the call, it executes through the router
+        from core.security import guard
+        with patch.object(guard, "_confirmation_handler", lambda *a, **k: (True, "approved in test")):
+            res = router.execute_tool("calc_kinetic_energy", {"mass": 10.0, "velocity": 2.0}, interactive=True)
         assert res.success is True
         assert res.output == 20.0
 
@@ -306,15 +312,14 @@ def format_currency(amount: float) -> str:
     return f"${amount:,.2f}"
 '''
 
-        with patch("core.agents.refiner_agent.Path") as mock_path:
-            # Let Path("tools") / "custom" point to tmp_path
-            mock_path.return_value = tmp_path
-            res = refiner_synthesize_custom_tool(
-                task_description="Format amounts as currency",
-                source_code=tool_code,
-                function_name="format_currency",
-                brain=mock_brain
-            )
+        # Write into a temp dir — never into the real tools/custom/ tree.
+        res = refiner_synthesize_custom_tool(
+            task_description="Format amounts as currency",
+            source_code=tool_code,
+            function_name="format_currency",
+            brain=mock_brain,
+            custom_dir=tmp_path / "custom",
+        )
 
         assert res.get("success") is True
         assert res.get("tool_name") == "format_currency"

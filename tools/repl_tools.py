@@ -235,7 +235,9 @@ class PersistentPowerShellSession:
             return
 
         self._proc = subprocess.Popen(
-            ["powershell.exe", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "-"],
+            # No "-ExecutionPolicy Bypass": the user's machine policy stays in force for any
+            # .ps1 scripts this session tries to run.
+            ["powershell.exe", "-NoLogo", "-NoProfile", "-Command", "-"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

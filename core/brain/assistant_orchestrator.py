@@ -224,8 +224,10 @@ class AssistantOrchestrator:
         Coordinates the full UNDERSTAND → RESPOND pipeline.
         DAG execution is strictly dependency-aware and sequential for desktop/browser session safety.
         """
-        from core.brain.task_model import current_execution_context
+        from core.brain.task_model import current_execution_context, current_turn_security, new_turn_security_state
         ctx_token = current_execution_context.set(context)
+        # Fresh per-request security state (tracks whether untrusted web content was read).
+        turn_sec_token = current_turn_security.set(new_turn_security_state())
         task = None
         try:
             t_start = time.perf_counter()
@@ -369,6 +371,7 @@ class AssistantOrchestrator:
             if task and task.status not in (TaskStatus.WAITING_FOR_INPUT, TaskStatus.WAITING_FOR_CONFIRMATION):
                 self._unregister_active_task(task)
             current_execution_context.reset(ctx_token)
+            current_turn_security.reset(turn_sec_token)
 
     # ─── Streaming Public Gateway ─────────────────────────────────────────────
 
@@ -382,8 +385,10 @@ class AssistantOrchestrator:
         Asynchronous streaming execution entry point token-by-token.
         Shares the identical AssistantOrchestrator task, security, and verification lifecycle.
         """
-        from core.brain.task_model import current_execution_context
+        from core.brain.task_model import current_execution_context, current_turn_security, new_turn_security_state
         ctx_token = current_execution_context.set(context)
+        # Fresh per-request security state (tracks whether untrusted web content was read).
+        turn_sec_token = current_turn_security.set(new_turn_security_state())
         task = None
         try:
             raw_text = user_input.strip()
@@ -579,6 +584,7 @@ class AssistantOrchestrator:
             if task and task.status not in (TaskStatus.WAITING_FOR_INPUT, TaskStatus.WAITING_FOR_CONFIRMATION):
                 self._unregister_active_task(task)
             current_execution_context.reset(ctx_token)
+            current_turn_security.reset(turn_sec_token)
 
     # ─── Planning & Decomposition ─────────────────────────────────────────────
 

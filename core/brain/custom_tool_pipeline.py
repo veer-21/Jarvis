@@ -78,6 +78,13 @@ FORBIDDEN_NAMES = {
 }
 
 # Dunder attributes and reflective patterns used for introspection escapes (P0-1)
+# Names of dangerous modules that allowed modules expose as attributes (typing.sys, random._os).
+_FORBIDDEN_MODULE_ATTRS = {
+    "os", "sys", "subprocess", "shutil", "socket", "ctypes", "importlib", "builtins",
+    "pickle", "marshal", "io", "pathlib", "signal", "threading", "multiprocessing",
+    "system", "popen", "spawn", "modules", "environ",
+}
+
 FORBIDDEN_REFLECTIVE_PATTERNS = {
     "__class__",
     "__mro__",
@@ -396,6 +403,13 @@ def validate_tool_source(source_code: str, filename: str = "<custom_tool>") -> t
                 return False, f"Security violation: forbidden attribute or reflective formatting API '{node.attr}' detected.", None
             if node.attr.startswith("__") or node.attr.endswith("__"):
                 return False, f"Security violation: dunder attribute access '{node.attr}' is prohibited.", None
+            # Allowed modules re-export dangerous ones through private or module-named
+            # attributes (random._os, typing.sys, json.decoder.re ...). Tool code never needs
+            # private attributes, nor to reach a module through another module's attributes.
+            if node.attr.startswith("_"):
+                return False, f"Security violation: forbidden private attribute access '{node.attr}' is prohibited.", None
+            if node.attr in _FORBIDDEN_MODULE_ATTRS:
+                return False, f"Security violation: forbidden access to module '{node.attr}' through an attribute is prohibited.", None
 
         # 5. Identifier & Runtime Name References (ast.Name)
         elif isinstance(node, ast.Name):
@@ -503,85 +517,162 @@ def dry_run_synthetic_execution(
     if not fn_name:
         return False, "Could not determine target function name for dry-run.", None
 
-    # 2. Compile
+    # 2. Compile (cheap syntax check in-process; nothing is executed here)
     try:
-        code_obj = compile(source_code, "<dry_run>", "exec")
+        compile(source_code, "<dry_run>", "exec")
     except Exception as comp_err:
         return False, f"Dry-run compilation error: {comp_err}", None
 
-    # 3. Prepare isolated namespace
-    import math, datetime, re, json, collections, itertools, string, random, typing
-    from core.brain.tool_router import jarvis_tool, ToolSchema
-    from core.security import RiskLevel
-
-    builtins_dict = {b: __builtins__[b] for b in ALLOWED_BUILTINS if isinstance(__builtins__, dict) and b in __builtins__} if isinstance(__builtins__, dict) else {b: getattr(__builtins__, b) for b in ALLOWED_BUILTINS if hasattr(__builtins__, b)}
-    builtins_dict["__import__"] = __import__
-
-    safe_ns: dict[str, Any] = {
-        "__builtins__": builtins_dict,
-        "math": math,
-        "datetime": datetime,
-        "re": re,
-        "json": json,
-        "collections": collections,
-        "itertools": itertools,
-        "string": string,
-        "random": random,
-        "typing": typing,
-        "jarvis_tool": jarvis_tool,
-        "ToolSchema": ToolSchema,
-        "RiskLevel": RiskLevel,
-    }
+    # 3. Execute in a separate, isolated interpreter with a hard timeout.
+    #    LLM-written code must never run inside the JARVIS process: an infinite loop would hang
+    #    it and any validator bypass would get full access to its memory and credentials.
+    payload = json.dumps({
+        "source": source_code,
+        "fn_name": fn_name,
+        "synthetic_args": synthetic_args or {},
+        "allowed_builtins": sorted(ALLOWED_BUILTINS),
+        "allowed_modules": sorted(ALLOWED_MODULES),
+    })
+    import sys
+    import subprocess
     try:
-        import pydantic
-        safe_ns["pydantic"] = pydantic
-        safe_ns["BaseModel"] = pydantic.BaseModel
-        safe_ns["Field"] = pydantic.Field
-    except ImportError:
-        pass
+        proc = subprocess.run(
+            [sys.executable, "-I", "-c", _DRY_RUN_CHILD],
+            input=payload,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"Dry-run timed out after {timeout_seconds:g}s (possible infinite loop).", None
+    except Exception as spawn_err:
+        return False, f"Dry-run sandbox could not start: {spawn_err}", None
 
     try:
-        exec(code_obj, safe_ns)
-    except Exception as exec_err:
-        return False, f"Dry-run module execution failed: {exec_err}", None
+        report = json.loads((proc.stdout or "").strip().splitlines()[-1])
+    except Exception:
+        detail = (proc.stderr or proc.stdout or "no output").strip()[-300:]
+        return False, f"Dry-run sandbox produced no result: {detail}", None
 
-    fn = safe_ns.get(fn_name)
-    if not fn or not callable(fn):
-        return False, f"Callable function '{fn_name}' not found after execution.", None
-
-    # 4. Generate synthetic arguments and execute
-    try:
-        sig = inspect.signature(fn)
-        call_args = {}
-        for p_name, param in sig.parameters.items():
-            if param.default != inspect.Parameter.empty:
-                continue
-            ann = param.annotation
-            if ann in (int, "int"):
-                call_args[p_name] = 1
-            elif ann in (float, "float"):
-                call_args[p_name] = 1.0
-            elif ann in (bool, "bool"):
-                call_args[p_name] = True
-            elif ann in (list, "list"):
-                call_args[p_name] = []
-            elif ann in (dict, "dict"):
-                call_args[p_name] = {}
-            elif ann in (str, "str"):
-                call_args[p_name] = "sample"
-            else:
-                call_args[p_name] = 1
-        if synthetic_args:
-            call_args.update(synthetic_args)
-
-        result = fn(**call_args)
-        return True, "Dry-run execution succeeded.", result
-    except Exception as run_err:
-        return False, f"Dry-run invocation failed: {type(run_err).__name__}: {run_err}", None
+    if not report.get("ok"):
+        return False, report.get("msg", "Dry-run failed."), None
+    if "result_json" in report:
+        return True, "Dry-run execution succeeded.", json.loads(report["result_json"])
+    return True, "Dry-run execution succeeded.", report.get("result_repr")
 
 
-DEFAULT_CUSTOM_DIR = Path(__file__).parent.parent.parent / "tools" / "custom"
-DEFAULT_QUARANTINE_DIR = Path(__file__).parent.parent.parent / "tools" / "custom" / "quarantine"
+# Runs in a fresh `python -I` child. Only allowlisted modules can be imported, builtins are
+# restricted, and framework names (jarvis_tool, RiskLevel, ...) are inert stand-ins.
+_DRY_RUN_CHILD = r"""
+import sys, json, inspect, builtins
+
+def _emit(obj):
+    sys.stdout.write(chr(10) + json.dumps(obj))
+    sys.stdout.flush()
+
+req = json.loads(sys.stdin.read())
+allowed_modules = set(req["allowed_modules"])
+_real_import = builtins.__import__
+
+FRAMEWORK_STUBS = ("core", "core.brain", "core.brain.tool_router", "core.security")
+
+def _restricted_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if level == 0 and name in FRAMEWORK_STUBS:
+        return sys.modules[name] if fromlist else sys.modules["core"]
+    if level != 0 or name.split(".")[0] not in allowed_modules:
+        raise ImportError(f"import of '{name}' is not allowed in custom tools")
+    return _real_import(name, globals, locals, fromlist, level)
+
+safe_builtins = {b: getattr(builtins, b) for b in req["allowed_builtins"] if hasattr(builtins, b)}
+safe_builtins["__import__"] = _restricted_import
+safe_builtins["__build_class__"] = builtins.__build_class__
+
+class RiskLevel:
+    READ_ONLY = SAFE = "READ_ONLY"
+    LOW_RISK = LOW = "LOW_RISK"
+    MODERATE_RISK = MEDIUM = "MODERATE_RISK"
+    HIGH_RISK = HIGH = "HIGH_RISK"
+    CRITICAL = CRITICAL_RISK = "CRITICAL"
+
+def jarvis_tool(*args, **kwargs):
+    if len(args) == 1 and callable(args[0]) and not kwargs:
+        return args[0]
+    return lambda fn: fn
+
+import types
+for _mod_name in FRAMEWORK_STUBS:
+    sys.modules[_mod_name] = types.ModuleType(_mod_name)
+sys.modules["core"].brain = sys.modules["core.brain"]
+sys.modules["core"].security = sys.modules["core.security"]
+sys.modules["core.brain"].tool_router = sys.modules["core.brain.tool_router"]
+sys.modules["core.brain.tool_router"].jarvis_tool = jarvis_tool
+sys.modules["core.brain.tool_router"].ToolSchema = object
+sys.modules["core.security"].RiskLevel = RiskLevel
+
+ns = {"__builtins__": safe_builtins, "__name__": "custom_tool_dry_run",
+      "jarvis_tool": jarvis_tool, "RiskLevel": RiskLevel, "ToolSchema": object}
+for mod in ("math", "datetime", "re", "json", "collections", "itertools", "string", "random", "typing"):
+    ns[mod] = _real_import(mod)
+try:
+    import pydantic
+    ns["pydantic"] = pydantic
+    ns["BaseModel"] = pydantic.BaseModel
+    ns["Field"] = pydantic.Field
+except ImportError:
+    pass
+
+try:
+    exec(compile(req["source"], "<dry_run>", "exec"), ns)
+except Exception as e:
+    _emit({"ok": False, "msg": f"Dry-run module execution failed: {e}"}); sys.exit(0)
+
+fn = ns.get(req["fn_name"])
+if not fn or not callable(fn):
+    _emit({"ok": False, "msg": f"Callable function '{req['fn_name']}' not found after execution."}); sys.exit(0)
+
+defaults = {int: 1, "int": 1, float: 1.0, "float": 1.0, bool: True, "bool": True,
+            list: [], "list": [], dict: {}, "dict": {}, str: "sample", "str": "sample"}
+try:
+    call_args = {}
+    for p_name, param in inspect.signature(fn).parameters.items():
+        if param.default is not inspect.Parameter.empty:
+            continue
+        call_args[p_name] = defaults.get(param.annotation, 1)
+    call_args.update(req.get("synthetic_args") or {})
+    result = fn(**call_args)
+except Exception as e:
+    _emit({"ok": False, "msg": f"Dry-run invocation failed: {type(e).__name__}: {e}"}); sys.exit(0)
+
+try:
+    _emit({"ok": True, "result_json": json.dumps(result)})
+except Exception:
+    _emit({"ok": True, "result_repr": repr(result)})
+"""
+
+
+DEFAULT_CUSTOM_DIR = Path(__file__).resolve().parent.parent.parent / "tools" / "custom"
+# Single quarantine location used by the pipeline, ToolRouter.load_custom_tools and the Refiner.
+QUARANTINE_DIRNAME = "_quarantine"
+DEFAULT_QUARANTINE_DIR = DEFAULT_CUSTOM_DIR / QUARANTINE_DIRNAME
+
+
+def resolve_tool_dir(requested: Optional[Any], default: Path) -> Path:
+    """
+    Resolve a custom-tool / quarantine directory, refusing locations outside the project's
+    tools/custom tree (or the system temp dir, used by tests). These paths can arrive as
+    LLM-supplied tool arguments, and writing generated code anywhere else (e.g. a Startup
+    folder) would be a persistence vector.
+    """
+    import tempfile
+    if requested is None:
+        return default
+    candidate = Path(requested).resolve()
+    allowed_roots = [DEFAULT_CUSTOM_DIR.resolve(), Path(tempfile.gettempdir()).resolve()]
+    for root in allowed_roots:
+        if candidate == root or root in candidate.parents:
+            return candidate
+    raise ValueError(f"Refusing to write generated tools outside tools/custom: {candidate}")
 
 
 def process_and_register_generated_tool(
@@ -594,10 +685,16 @@ def process_and_register_generated_tool(
     Executes the full quarantine, validation, dry-run, and registration pipeline for generated tools:
     GENERATE → WRITE TO QUARANTINE → AST/SYNTAX VALIDATION → COMPILE → STATIC SAFETY CHECKS → DRY-RUN → ONLY THEN REGISTER.
     """
+    try:
+        custom_dir = resolve_tool_dir(custom_dir, DEFAULT_CUSTOM_DIR)
+        quarantine_dir = resolve_tool_dir(quarantine_dir, custom_dir / QUARANTINE_DIRNAME)
+    except ValueError as path_err:
+        error_log.error(f"[CustomToolPipeline] {path_err}")
+        return False, str(path_err)
     custom_dir.mkdir(parents=True, exist_ok=True)
     quarantine_dir.mkdir(parents=True, exist_ok=True)
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    timestamp =datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     match = re.search(r"def\s+([a-zA-Z0-9_]+)\s*\(", source_code)
     func_name = match.group(1) if match else f"unknown_tool_{timestamp}"
 
