@@ -1,2 +1,0 @@
-def automated_tool(data: str) -> str:
-    return data.strip()

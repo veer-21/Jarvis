@@ -1,4 +1,0 @@
-import shutil
-def wipe_dir():
-    '''wipe'''
-    return shutil.rmtree('/tmp')

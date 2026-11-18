@@ -17,6 +17,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from core.logger import log, audit_log
+import core.config  # noqa: F401  — ensures .env is loaded before JARVIS_JWT_SECRET is read
 
 # ─── Optional JWT ─────────────────────────────────────────────────────────────
 try:
@@ -28,7 +29,31 @@ except ImportError:
 
 
 # ─── Config ───────────────────────────────────────────────────────────────────
-SECRET_KEY    = os.environ.get("JARVIS_JWT_SECRET") or secrets.token_urlsafe(64)
+def _load_or_create_jwt_secret() -> str:
+    """
+    Use JARVIS_JWT_SECRET if set; otherwise persist a random per-install secret so that
+    restarting the backend does not log the owner out. Stored next to the other local
+    security material (data/security/, which is git-ignored).
+    """
+    env_secret = os.environ.get("JARVIS_JWT_SECRET")
+    if env_secret:
+        return env_secret
+    try:
+        from core.security import SECURITY_DIR
+        secret_file = SECURITY_DIR / ".jwt_secret"
+        if secret_file.exists():
+            existing = secret_file.read_text(encoding="utf-8").strip()
+            if len(existing) >= 32:
+                return existing
+        new_secret = secrets.token_urlsafe(64)
+        secret_file.write_text(new_secret, encoding="utf-8")
+        return new_secret
+    except Exception as e:
+        log.warning(f"Could not persist JWT secret ({e}); using an ephemeral one.")
+        return secrets.token_urlsafe(64)
+
+
+SECRET_KEY    = _load_or_create_jwt_secret()
 ALGORITHM     = "HS256"
 TOKEN_EXPIRE  = int(os.environ.get("JARVIS_TOKEN_EXPIRE_HOURS", "12"))  # hours
 

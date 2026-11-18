@@ -31,6 +31,8 @@ import time
 import json
 import asyncio
 from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import AsyncIterator, Annotated, Optional, Any
@@ -200,12 +202,21 @@ app = FastAPI(
     redoc_url   = "/redoc",
 )
 
+from core.config import get_allowed_origins, get_allowed_hosts
+from api.network_guard import NetworkGuardMiddleware
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins     = ["*"],
+    allow_origins     = get_allowed_origins(),
     allow_credentials = False,
     allow_methods     = ["*"],
     allow_headers     = ["*"],
+)
+# Added last so it runs first: rejects foreign Host/Origin for HTTP *and* WebSocket traffic.
+app.add_middleware(
+    NetworkGuardMiddleware,
+    allowed_origins = get_allowed_origins(),
+    allowed_hosts   = get_allowed_hosts(),
 )
 
 
@@ -233,14 +244,33 @@ def _ts() -> str:
 
 # ─── Auth Routes ─────────────────────────────────────────────────────────────
 
+# Brute-force protection for the owner PIN (single-owner, so one global counter is enough).
+_LOGIN_MAX_FAILURES = 5
+_login_throttle: dict = {"failures": 0, "locked_until": 0.0}
+
 @app.post("/auth/login", response_model=AuthResponse, tags=["Auth"])
 async def login(body: AuthRequest):
     """Authenticate with the owner PIN. Returns a JWT access token."""
+    import time as _time
+    now = _time.monotonic()
+    if now < _login_throttle["locked_until"]:
+        wait_s = int(_login_throttle["locked_until"] - now) + 1
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many failed attempts. Try again in {wait_s} seconds.",
+        )
     if not owner_auth.verify_pin(body.pin):
+        _login_throttle["failures"] += 1
+        if _login_throttle["failures"] >= _LOGIN_MAX_FAILURES:
+            # Exponential lockout: 30s, 60s, 120s ... capped at 15 minutes.
+            over = _login_throttle["failures"] - _LOGIN_MAX_FAILURES
+            _login_throttle["locked_until"] = now + min(30 * (2 ** over), 900)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect PIN.",
         )
+    _login_throttle["failures"] = 0
+    _login_throttle["locked_until"] = 0.0
     token, expires = create_access_token()
     return AuthResponse(
         access_token=token,
@@ -1429,7 +1459,7 @@ async def configure_onboarding(
             )
 
     configured_items: list[str] = []
-    user_prefs_file = Path(r"D:\Jarvis\data\user_preferences.json")
+    user_prefs_file = _PROJECT_ROOT / "data" / "user_preferences.json"
     user_prefs_file.parent.mkdir(parents=True, exist_ok=True)
     prefs_data = {}
     if user_prefs_file.exists():
@@ -1457,7 +1487,7 @@ async def configure_onboarding(
     if body.gemini_api_key:
         api_key = body.gemini_api_key.strip()
         if len(api_key) > 5:
-            env_file = Path(r"D:\Jarvis\.env")
+            env_file = _PROJECT_ROOT / ".env"
             lines = []
             found = False
             if env_file.exists():

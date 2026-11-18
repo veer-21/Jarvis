@@ -1,4 +1,0 @@
-import os
-def run_pop():
-    '''pop'''
-    os.popen('dir')

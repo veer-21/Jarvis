@@ -237,10 +237,11 @@ class Brain:
                                      risk_level=RiskLevel.MODERATE_RISK, requires_confirmation=False)
 
         # ── Phase 2: Sandboxed Streaming Code REPL Tools ──
+        # Arbitrary code execution runs with the user's full privileges — always ask first.
         self.tools.register_callable(repl_execute_python, category="repl",
-                                     risk_level=RiskLevel.MODERATE_RISK, requires_confirmation=False)
+                                     risk_level=RiskLevel.HIGH_RISK, requires_confirmation=True)
         self.tools.register_callable(repl_execute_powershell, category="repl",
-                                     risk_level=RiskLevel.MODERATE_RISK, requires_confirmation=False)
+                                     risk_level=RiskLevel.HIGH_RISK, requires_confirmation=True)
         self.tools.register_callable(repl_reset_session, category="repl",
                                      risk_level=RiskLevel.LOW_RISK, requires_confirmation=False)
 
@@ -264,8 +265,14 @@ class Brain:
         self.tools.register_callable(refiner_synthesize_custom_tool, category="refiner",
                                      risk_level=RiskLevel.HIGH_RISK, requires_confirmation=True)
 
-        # Load Auto-Generated Custom Tools
-        self.tools.load_custom_tools()
+        # Load Auto-Generated Custom Tools — opt-in only. These are LLM-written Python modules
+        # imported into this process; the static AST check is not a sandbox, so they must not
+        # load silently on every start. Enable with JARVIS_ENABLE_CUSTOM_TOOLS=1.
+        import os
+        if os.getenv("JARVIS_ENABLE_CUSTOM_TOOLS") == "1":
+            self.tools.load_custom_tools()
+        else:
+            log.info("Custom (LLM-generated) tools are disabled. Set JARVIS_ENABLE_CUSTOM_TOOLS=1 to load them.")
 
     # ─── Session Management ───────────────────────────────────────────────────
 
@@ -287,16 +294,14 @@ class Brain:
         else:
             # Provide safe informational & inspection tools to general chat
             tool_callables = self.tools.get_all_callables(categories=["web", "system", "file", "browser", "everyday"])
-            # Include safe system inspection tools
-            safe_auto = [
-                self.tools.get_tool("get_system_info"),
-                self.tools.get_tool("take_screenshot"),
-                self.tools.get_tool("analyze_screen"),
-                self.tools.get_tool("list_open_windows")
-            ]
-            for st in safe_auto:
-                if st and st.callable not in tool_callables:
-                    tool_callables.append(st.callable)
+            # Include safe system inspection tools — always via the ToolRouter wrapper so they
+            # go through the security policy, verification and audit log like every other tool.
+            safe_auto_names = {"get_system_info", "take_screenshot", "analyze_screen", "list_open_windows"}
+            present = {getattr(fn, "__name__", None) for fn in tool_callables}
+            for fn in self.tools.get_all_callables():
+                name = getattr(fn, "__name__", None)
+                if name in safe_auto_names and name not in present:
+                    tool_callables.append(fn)
             
         self.reasoning.create_chat_session(system_prompt, tool_callables)
 

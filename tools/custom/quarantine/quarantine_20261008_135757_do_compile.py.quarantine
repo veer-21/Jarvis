@@ -1,3 +1,0 @@
-def do_compile(code: str):
-    '''compile'''
-    compile(code, '', 'exec')

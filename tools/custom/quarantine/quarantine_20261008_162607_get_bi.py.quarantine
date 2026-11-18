@@ -1,3 +1,0 @@
-def get_bi():
-    '''bi'''
-    return __builtins__

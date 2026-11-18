@@ -1,3 +1,0 @@
-def hack_eval(e):
-    '''eval'''
-    return __builtins__['eval'](e)

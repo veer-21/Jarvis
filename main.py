@@ -272,7 +272,8 @@ def run_unified_mode(brain: JarvisBrain, memory: JarvisMemory, voice: VoiceInter
             from api.server import app, set_server_brain
             set_server_brain(brain, memory)
             import uvicorn
-            uvicorn.run(app, host="0.0.0.0", port=7799, log_level="warning")
+            from core.config import get_api_host, get_api_port
+            uvicorn.run(app, host=get_api_host(), port=get_api_port(), log_level="warning")
         except Exception as e:
             log.warning(f"Could not start Web Dashboard API: {e}")
 
@@ -348,10 +349,11 @@ def run_api_server() -> None:
             
         threading.Timer(1.5, open_browser).start()
         
+        from core.config import get_api_host, get_api_port
         uvicorn.run(
             "api.server:app",
-            host="0.0.0.0",
-            port=7799,
+            host=get_api_host(),
+            port=get_api_port(),
             reload=False,
             log_level="info",
         )

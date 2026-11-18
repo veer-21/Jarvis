@@ -89,6 +89,10 @@ node_modules/
 desktop/node_modules/
 
 # Local databases and runtime state
+# Everything under data/ is per-user runtime state (memory, conversations, keys, screenshots)
+# and must never be committed.
+data/
+tools/custom/_quarantine/
 data/memory/chroma/
 data/tasks/
 data/user_preferences.json

@@ -372,9 +372,17 @@ def open_application(app_name: str) -> str:
         "media player": "wmplayer",
     }
 
-    resolved = APP_ALIASES.get(app_name.lower().strip(), app_name)
+    resolved = APP_ALIASES.get(app_name.lower().strip(), app_name).strip()
+
+    # The app name comes from the LLM (and therefore possibly from a malicious web page).
+    # Never hand it to a shell: reject command chaining / redirection characters outright.
+    if not resolved or any(ch in resolved for ch in '&|<>^%"\r\n`;'):
+        log.warning(f"open_application rejected unsafe app name: {app_name!r}")
+        return f"Failed to open '{app_name}': the name contains characters that are not allowed."
+
     try:
-        subprocess.Popen(f"start {resolved}", shell=True)
+        # os.startfile uses ShellExecute (same lookup as Win+R / `start`) without a shell.
+        os.startfile(resolved)
         log.info(f"Application launched: {app_name} (resolved: {resolved})")
         return f"Launched '{app_name}' successfully."
     except Exception as e:

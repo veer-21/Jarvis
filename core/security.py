@@ -61,6 +61,42 @@ class RiskLevel(str, Enum):
     CRITICAL_RISK  = "CRITICAL"
 
 
+def _terminal_prompt(question: str) -> str:
+    """
+    Ask the owner for approval on the terminal — but only when a real interactive terminal
+    is attached. Inside the API server / Electron sidecar / tests there is no human at stdin,
+    and blocking on input() there would hang a worker thread, so we deny instead.
+    """
+    try:
+        if not _stdin_is_interactive():
+            return "no"
+        return input(question).strip().lower()
+    except (EOFError, KeyboardInterrupt, OSError, ValueError):
+        return "no"
+
+
+def _stdin_is_interactive() -> bool:
+    import sys
+    try:
+        return bool(sys.stdin) and sys.stdin.isatty()
+    except (OSError, ValueError):
+        return False
+
+
+CRITICAL_PROCESSES = ["explorer.exe", "dwm.exe", "lsass.exe", "csrss.exe", "smss.exe", "services.exe", "wininit.exe"]
+
+
+def hard_block_reason(command: str) -> Optional[str]:
+    """
+    Commands that are never allowed, regardless of owner approval.
+    Returns a human-readable reason, or None if the command is not hard-blocked.
+    """
+    cmd_lower = (command or "").lower()
+    if any(proc in cmd_lower for proc in CRITICAL_PROCESSES) and ("kill" in cmd_lower or "stop" in cmd_lower):
+        return "Cannot terminate critical Windows operating system processes."
+    return None
+
+
 def mask_sensitive_data(data: Any) -> Any:
     """Recursively mask secrets, passwords, tokens, and keys from logs and events."""
     if isinstance(data, dict):
@@ -445,6 +481,7 @@ class SecurityGuard:
             (allowed: bool, reason: str)
         """
         risk = self.assess_command_risk(command)
+        cmd_lower = command.lower()
 
         if risk == RiskLevel.SAFE:
             audit_log.info({
@@ -480,10 +517,7 @@ class SecurityGuard:
             return False, "Command blocked: Cannot terminate critical Windows operating system processes."
 
         if interactive:
-            try:
-                approval = input("  Do you authorize this action? (yes/no): ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                approval = "no"
+            approval = _terminal_prompt("  Do you authorize this action? (yes/no): ")
 
             if approval in ("yes", "y"):
                 audit_log.info({
@@ -516,7 +550,8 @@ class SecurityGuard:
         tool_name: str,
         args: dict,
         declared_risk: RiskLevel = RiskLevel.READ_ONLY,
-        interactive: bool = True
+        interactive: bool = True,
+        declared_requires_confirmation: bool = False,
     ) -> tuple[bool, RiskLevel, bool, str]:
         """
         Unified Single Policy Decision Point for EVERY tool execution.
@@ -596,7 +631,12 @@ class SecurityGuard:
         elif t_low == "repl_reset_session":
             effective_risk = RiskLevel.LOW_RISK
 
-        requires_confirmation = effective_risk in (RiskLevel.HIGH_RISK, RiskLevel.CRITICAL)
+        # A tool registered with requires_confirmation=True (e.g. write_file, safe_delete_file)
+        # must always be confirmed, even when its risk tier alone would not demand it.
+        requires_confirmation = (
+            effective_risk in (RiskLevel.HIGH_RISK, RiskLevel.CRITICAL)
+            or bool(declared_requires_confirmation)
+        )
 
         # Protected Critical Windows Processes - never allow terminating them
         if "command" in args and isinstance(args["command"], str):
@@ -654,10 +694,7 @@ class SecurityGuard:
         print(f"  Tool: {tool_name}")
         print(f"  Risk Level: {effective_risk.value}")
         print(f"  Parameters: {mask_sensitive_data(args)}")
-        try:
-            approval = input("  Do you authorize this action? (yes/no): ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            approval = "no"
+        approval = _terminal_prompt("  Do you authorize this action? (yes/no): ")
 
         if approval in ("yes", "y"):
             audit_log.info({

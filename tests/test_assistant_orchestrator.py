@@ -164,8 +164,9 @@ class TestPhase3Orchestrator(unittest.TestCase):
         self.assertTrue(req_conf_hi)
         self.assertIn("confirmation", reason_hi.lower())
 
-        # Interactive approval simulation
-        with patch("builtins.input", return_value="y"):
+        # Interactive approval simulation (terminal prompts only fire when a real TTY is attached)
+        with patch("builtins.input", return_value="y"), \
+             patch("core.security._stdin_is_interactive", return_value=True):
             approved_int, risk_int, req_conf_int, reason_int = guard.evaluate_tool_execution(
                 "execute_command", {"command": "dir"}, declared_risk=RiskLevel.HIGH_RISK, interactive=True
             )

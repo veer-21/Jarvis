@@ -9,7 +9,7 @@ instead of maintaining a duplicate dangerous commands list.
 import subprocess
 
 from core.logger import log, error_log
-from core.security import guard
+from core.security import guard, hard_block_reason
 
 
 def execute_command(command: str) -> str:
@@ -18,9 +18,12 @@ def execute_command(command: str) -> str:
     Args:
         command: The shell command string to execute.
     """
-    # Security check through the central guard
-    allowed, reason = guard.check_command(command, interactive=True)
-    if not allowed:
+    # Approval happens once, in the ToolRouter policy point (this tool is registered HIGH risk
+    # with requires_confirmation=True, so the owner is asked in the UI/terminal before we get
+    # here). Re-prompting here used to block every approved command. Only absolute hard-blocks
+    # are re-checked at execution time.
+    reason = hard_block_reason(command)
+    if reason:
         log.warning(f"Command blocked: {command} — {reason}")
         return f"Command execution blocked: {reason}"
 

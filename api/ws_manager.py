@@ -317,9 +317,12 @@ class WebSocketManager:
             return False
 
     async def broadcast(self, message: dict):
-        """Broadcast a message asynchronously to all active connections."""
+        """Broadcast a message asynchronously to all *authenticated* connections."""
         disconnected = []
         for connection in list(self.active_connections):
+            if not self.is_authenticated(connection):
+                # Never leak chat/tool output to sockets that have not presented a valid token.
+                continue
             try:
                 await connection.send_json(message)
             except Exception as e:

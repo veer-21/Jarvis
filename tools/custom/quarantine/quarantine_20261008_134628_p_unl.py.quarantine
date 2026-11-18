@@ -1,4 +1,0 @@
-from pathlib import Path
-def p_unl():
-    '''unl'''
-    Path('file.txt').unlink()

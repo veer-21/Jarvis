@@ -1,4 +1,0 @@
-import sys
-def get_sys():
-    '''sys'''
-    return sys.modules

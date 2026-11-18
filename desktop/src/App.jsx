@@ -637,7 +637,12 @@ function App() {
 
   const connectWebSocket = (authToken) => {
     const ws = new WebSocket('ws://localhost:7799/ws/jarvis')
-    ws.onopen = () => setStatus('ONLINE')
+    ws.onopen = () => {
+      setStatus('ONLINE')
+      // Authenticate immediately: the backend only broadcasts to authenticated sockets.
+      const t = authToken || token
+      if (t) ws.send(JSON.stringify({ command: 'auth', token: t }))
+    }
     ws.onclose = () => setStatus('OFFLINE')
     
     ws.onmessage = (event) => {

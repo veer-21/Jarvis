@@ -1,3 +1,0 @@
-def read_env():
-    '''read env'''
-    return open('.env').read()

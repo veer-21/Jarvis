@@ -1,4 +1,0 @@
-import ctypes
-def mem_hack():
-    '''hack'''
-    ctypes.CDLL(None)

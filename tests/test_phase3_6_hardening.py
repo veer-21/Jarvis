@@ -408,6 +408,8 @@ def test_background_worker_safe_broadcast_delivery():
         mock_ws.send_json = mock_send_json
 
         await ws_manager.connect(mock_ws)
+        # Broadcasts are only delivered to authenticated sockets.
+        ws_manager.authenticate_connection(mock_ws, token="test-token", user_id="owner")
 
         def worker_dispatch():
             ws_manager.safe_broadcast({
@@ -646,7 +648,15 @@ def calculate_hypotenuse(a: float, b: float) -> float:
     assert router.tool_count == initial_count + 1
     tool_schema = router.get_tool("calculate_hypotenuse")
     assert tool_schema is not None
+
+    # Unreviewed LLM-generated tools must not run unattended.
+    blocked = router.execute_tool("calculate_hypotenuse", {"a": 3.0, "b": 4.0}, interactive=False)
+    assert blocked.success is False
+    assert blocked.status == "BLOCKED"
+
+    # Once the owner has reviewed it and marked it safe, it runs unattended.
     tool_schema.risk_level = RiskLevel.SAFE
+    tool_schema.requires_confirmation = False
     res = router.execute_tool("calculate_hypotenuse", {"a": 3.0, "b": 4.0}, interactive=False)
     assert res.success is True
     assert res.output == 5.0

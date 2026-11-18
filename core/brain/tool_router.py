@@ -347,6 +347,16 @@ class ToolRouter:
         """Look up a tool by name."""
         return self._registry.get(name)
 
+    @staticmethod
+    def _session_can_confirm() -> bool:
+        """True when a UI confirmation handler exists and the current call belongs to a session."""
+        from core.security import guard
+        from core.brain.task_model import current_execution_context
+        if getattr(guard, "_confirmation_handler", None) is None:
+            return False
+        ctx = current_execution_context.get()
+        return bool(ctx and getattr(ctx, "session_id", None))
+
     def get_all_callables(self, categories: Optional[list[str]] = None) -> list[Callable]:
         """Return registered tool callables wrapped to use execute_tool, optionally filtered by category."""
         import inspect
@@ -364,7 +374,10 @@ class ToolRouter:
                 def wrapper(*args, **kwargs):
                     bound = sig.bind(*args, **kwargs)
                     bound.apply_defaults()
-                    res = self.execute_tool(s.name, bound.arguments, interactive=False)
+                    # Ask the owner (via the UI confirmation bridge) when a live session can
+                    # answer; otherwise risky tools are blocked rather than silently run.
+                    res = self.execute_tool(s.name, bound.arguments,
+                                            interactive=self._session_can_confirm())
                     if res["success"]:
                         return str(res["result"])
                     else:
@@ -443,7 +456,8 @@ class ToolRouter:
             tool_name=name,
             args=args,
             declared_risk=schema.risk_level,
-            interactive=interactive
+            interactive=interactive,
+            declared_requires_confirmation=schema.requires_confirmation,
         )
         if not allowed:
             log.warning(f"Tool '{name}' blocked: {reason}")

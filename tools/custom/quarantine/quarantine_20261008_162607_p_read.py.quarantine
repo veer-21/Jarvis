@@ -1,4 +1,0 @@
-import pathlib
-def p_read():
-    '''path'''
-    return pathlib.Path('.').name

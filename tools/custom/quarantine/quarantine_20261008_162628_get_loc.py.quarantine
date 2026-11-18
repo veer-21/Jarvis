@@ -1,3 +1,0 @@
-def get_loc():
-    '''loc'''
-    return locals()

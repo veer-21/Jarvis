@@ -42,6 +42,47 @@ def _is_restricted(path: str) -> bool:
     return any(abs_path.startswith(r) for r in RESTRICTED_PATHS)
 
 
+# ─── Safety: Sensitive Files (secrets / credentials / browser data) ─────────
+# The LLM chooses which files to read, and its instructions can come from untrusted web
+# pages (prompt injection). These locations hold secrets that must never be read into the
+# model context, where they could be exfiltrated through a web tool.
+_SENSITIVE_DIR_PARTS = {
+    ".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".git-credentials",
+    "credentials", "secrets",
+}
+_SENSITIVE_PATH_FRAGMENTS = [
+    "/appdata/local/google/chrome/user data",
+    "/appdata/local/microsoft/edge/user data",
+    "/appdata/local/bravesoftware/brave-browser/user data",
+    "/appdata/roaming/mozilla/firefox/profiles",
+    "/appdata/roaming/microsoft/credentials",
+    "/appdata/local/microsoft/credentials",
+    "/appdata/roaming/microsoft/protect",
+    "/data/security",            # JARVIS' own PIN hash, encryption key and JWT secret
+]
+_SENSITIVE_FILE_NAMES = {
+    ".env", ".netrc", ".pgpass", ".npmrc", ".pypirc", ".git-credentials",
+    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "known_hosts",
+    "credentials.json", "token.json", "secrets.json", "login data", "cookies",
+}
+_SENSITIVE_SUFFIXES = (".pem", ".key", ".pfx", ".p12", ".kdbx", ".jks", ".keystore")
+
+
+def _is_sensitive(path: str) -> bool:
+    """True if the path points at (or inside) a location that holds secrets."""
+    try:
+        p = Path(path).resolve()
+    except Exception:
+        return True
+    posix = p.as_posix().lower()
+    name = p.name.lower()
+    if name in _SENSITIVE_FILE_NAMES or name.startswith(".env.") or name.endswith(_SENSITIVE_SUFFIXES):
+        return True
+    if any(part.lower() in _SENSITIVE_DIR_PARTS for part in p.parts):
+        return True
+    return any(frag in posix for frag in _SENSITIVE_PATH_FRAGMENTS)
+
+
 # ─── Tools ───────────────────────────────────────────────────────────────────
 
 def read_file(path: str, max_chars: int = 50_000) -> str:
@@ -56,6 +97,9 @@ def read_file(path: str, max_chars: int = 50_000) -> str:
     try:
         path = os.path.expandvars(os.path.expanduser(path))
         resolved = Path(path).resolve()
+        if _is_sensitive(str(resolved)):
+            guard.log_file_access("READ", str(resolved), allowed=False)
+            return f"Error: Access denied — '{resolved.name}' is a protected secrets/credentials location."
         guard.log_file_access("READ", str(resolved), allowed=True)
 
         if not resolved.exists():
@@ -88,7 +132,7 @@ def write_file(path: str, content: str, mode: str = "write") -> str:
         path = os.path.expandvars(os.path.expanduser(path))
         resolved = Path(path).resolve()
 
-        if _is_restricted(str(resolved)):
+        if _is_restricted(str(resolved)) or _is_sensitive(str(resolved)):
             guard.log_file_access("WRITE_BLOCKED", str(resolved), allowed=False)
             return f"Error: Writing to '{resolved}' is restricted for security reasons."
 
@@ -247,7 +291,7 @@ def search_in_files(directory: str, query: str, extension: str = ".txt") -> str:
         matches = []
 
         for filepath in root.rglob(pattern):
-            if not filepath.is_file():
+            if not filepath.is_file() or _is_sensitive(str(filepath)):
                 continue
             try:
                 text = filepath.read_text(encoding="utf-8", errors="ignore")
