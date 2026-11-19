@@ -28,6 +28,7 @@ RATE_LIMIT = "rate_limit"
 AUTH = "auth"
 SERVICE = "service"
 BAD_REQUEST = "bad_request"
+MODEL_NOT_FOUND = "model_not_found"   # configured model was retired/renamed: recoverable
 OTHER = "other"
 
 _RATE_LIMIT_MARKERS = ("429", "resource_exhausted", "quota", "rate limit", "rate_limit",
@@ -38,6 +39,9 @@ _SERVICE_MARKERS = ("500", "502", "503", "504", "unavailable", "high demand", "s
                     "deadline", "timeout", "timed out", "connection", "connecterror",
                     "temporarily", "overloaded")
 _BAD_REQUEST_MARKERS = ("400", "invalid_argument", "bad request", "invalid_request_error")
+_MODEL_NOT_FOUND_MARKERS = ("model_not_found", "no longer available", "decommissioned",
+                            "does not exist", "not_found", "404", "unknown model",
+                            "model not found", "is not supported")
 
 
 def classify_provider_error(error: Any) -> str:
@@ -50,6 +54,8 @@ def classify_provider_error(error: Any) -> str:
         return RATE_LIMIT
     if any(m in text for m in _AUTH_MARKERS):
         return AUTH
+    if "model" in text and any(m in text for m in _MODEL_NOT_FOUND_MARKERS):
+        return MODEL_NOT_FOUND
     if any(m in text for m in _SERVICE_MARKERS):
         return SERVICE
     if any(m in text for m in _BAD_REQUEST_MARKERS):
@@ -79,7 +85,8 @@ class CircuitBreaker:
     not by provider health.
     """
 
-    COOLDOWNS = {RATE_LIMIT: 60.0, AUTH: 300.0, SERVICE: 30.0, OTHER: 15.0, "manual": 60.0}
+    COOLDOWNS = {RATE_LIMIT: 60.0, AUTH: 300.0, SERVICE: 30.0, OTHER: 15.0,
+                 MODEL_NOT_FOUND: 300.0, "manual": 60.0}
     MAX_COOLDOWN = 900.0
 
     def __init__(self, name: str, clock: Callable[[], float] = time.monotonic):
@@ -226,9 +233,9 @@ def _setting(name: str, default):
 def default_request_timeout() -> float:
     """Per-request timeout (seconds) for every LLM call."""
     try:
-        return float(_setting("llm_timeout_seconds", 60.0))
+        return float(_setting("llm_timeout_seconds", 40.0))
     except (TypeError, ValueError):
-        return 60.0
+        return 40.0
 
 
 def default_max_output_tokens() -> int:
@@ -245,3 +252,48 @@ def default_ollama_model() -> str:
 
 def default_openai_model() -> str:
     return str(_setting("openai_model", "gpt-4o-mini"))
+
+
+# ─── Model selection (self-healing when providers retire models) ─────────────
+
+DEFAULT_GEMINI_MODEL = "gemini-flash-latest"      # Google-maintained alias for the current Flash
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
+
+_NON_CHAT_MARKERS = ("image", "tts", "transcribe", "embedding", "embed", "guard", "whisper",
+                     "orpheus", "robotics", "computer-use", "nano", "audio", "vision-only", "aqa")
+
+
+def _is_chat_model(model_id: str) -> bool:
+    low = model_id.lower()
+    return not any(m in low for m in _NON_CHAT_MARKERS)
+
+
+def _version_key(model_id: str) -> tuple:
+    import re as _re
+    nums = [int(n) for n in _re.findall(r"\d+", model_id)]
+    return tuple(nums) if nums else (0,)
+
+
+def pick_replacement_model(provider: str, available: list[str], failed: Optional[str] = None) -> Optional[str]:
+    """
+    Choose a working general-purpose chat model from a provider's live model list.
+    Preference: stable "latest" aliases, then the newest non-preview Flash/general model.
+    """
+    ids = [m.replace("models/", "") for m in available if m]
+    ids = [m for m in ids if _is_chat_model(m) and m != failed]
+    if not ids:
+        return None
+    if provider == "gemini":
+        for alias in ("gemini-flash-latest", "gemini-pro-latest"):
+            if alias in ids:
+                return alias
+        flash = [m for m in ids if "flash" in m and "lite" not in m and "preview" not in m]
+        pool = flash or [m for m in ids if "preview" not in m] or ids
+        return sorted(pool, key=_version_key)[-1]
+    # OpenAI-compatible providers (Groq, OpenAI, OpenRouter, Ollama)
+    preferred = ["openai/gpt-oss-120b", "gpt-4o-mini", "gpt-4.1-mini", "llama3.2", "qwen"]
+    for want in preferred:
+        for m in ids:
+            if m == want or (want == "qwen" and m.startswith("qwen")):
+                return m
+    return sorted(ids)[0]

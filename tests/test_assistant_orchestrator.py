@@ -17,6 +17,7 @@ K. Security risk evaluation & data masking
 import os
 import sys
 import unittest
+import pytest
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -32,9 +33,33 @@ from core.brain.tool_router import ToolRouter
 from core.brain.reasoning_engine import ReasoningEngine
 
 
+def _notepad_pids() -> set:
+    try:
+        import psutil
+        return {p.pid for p in psutil.process_iter(["name"]) if (p.info.get("name") or "").lower() == "notepad.exe"}
+    except Exception:
+        return set()
+
+
+def _close_new_notepads(before: set) -> None:
+    try:
+        import psutil
+        for pid in _notepad_pids() - set(before):
+            try:
+                psutil.Process(pid).terminate()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+desktop_test = pytest.mark.desktop  # launches real apps; run with JARVIS_RUN_DESKTOP_TESTS=1
+
+
 class TestPhase3Orchestrator(unittest.TestCase):
 
     def setUp(self):
+        self._notepads_before = _notepad_pids()
         self.router = ToolRouter()
         # Register standard dummy/mock tools for deterministic testing
         def dummy_read(file_path: str):
@@ -85,14 +110,12 @@ class TestPhase3Orchestrator(unittest.TestCase):
         )
 
     def tearDown(self):
-        try:
-            import subprocess
-            subprocess.run(["taskkill", "/F", "/IM", "notepad.exe"], capture_output=True)
-        except Exception:
-            pass
+        # Close only Notepad windows this test opened - never the developer's own.
+        _close_new_notepads(getattr(self, "_notepads_before", set()))
 
     # ─── A. Single-Step Tasks ─────────────────────────────────────────────────
 
+    @desktop_test
     def test_single_step_task(self):
         """Test single-step execution and result formatting."""
         res = self.orchestrator.process("open notepad and tell me whether it is running")
@@ -315,6 +338,7 @@ class TestAcceptanceCriteria(unittest.TestCase):
     """
 
     def setUp(self):
+        self._notepads_before = _notepad_pids()
         self.router = ToolRouter()
 
         def mock_read(file_path: str):
@@ -355,12 +379,10 @@ class TestAcceptanceCriteria(unittest.TestCase):
         )
 
     def tearDown(self):
-        try:
-            import subprocess
-            subprocess.run(["taskkill", "/F", "/IM", "notepad.exe"], capture_output=True)
-        except Exception:
-            pass
+        # Close only Notepad windows this test opened - never the developer's own.
+        _close_new_notepads(getattr(self, "_notepads_before", set()))
 
+    @desktop_test
     def test_acceptance_open_notepad_and_verify(self):
         """'Open Notepad and tell me whether it is running.'"""
         res = self.orchestrator.process("Open Notepad and tell me whether it is running.")

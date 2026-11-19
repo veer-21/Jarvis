@@ -282,3 +282,48 @@ def test_memory_policy_sensitive_and_memory_card():
     assert MemoryPolicy.classify_interaction("my pin is 4821") == (MemoryTier.DO_NOT_STORE, "sensitive")
     assert MemoryPolicy.classify_interaction("remove the memory card from the camera")[1] != "delete_request"
     assert MemoryPolicy.classify_interaction("forget my coffee preference")[1] == "delete_request"
+
+
+# ─── Self-healing model selection (providers retire models) ──────────────────
+
+def test_retired_model_errors_are_classified():
+    from core.brain.llm_providers import MODEL_NOT_FOUND
+    assert classify_provider_error(
+        "404 NOT_FOUND. This model models/gemini-2.5-flash is no longer available to new users") == MODEL_NOT_FOUND
+    assert classify_provider_error(
+        "groq API error 400: The model `llama-3.3-70b-versatile` has been decommissioned") == MODEL_NOT_FOUND
+
+
+def test_pick_replacement_model_prefers_stable_aliases():
+    from core.brain.llm_providers import pick_replacement_model
+    gemini = ["models/gemini-2.5-flash", "models/gemini-3.5-flash", "models/gemini-3.8-flash-tts",
+              "models/gemini-flash-latest", "models/gemini-3.1-flash-image"]
+    assert pick_replacement_model("gemini", gemini, failed="gemini-2.5-flash") == "gemini-flash-latest"
+    assert pick_replacement_model("gemini", gemini[:3], failed="gemini-2.5-flash") == "gemini-3.5-flash"
+    groq = ["whisper-large-v3", "meta-llama/llama-prompt-guard-2-22m", "openai/gpt-oss-120b", "qwen/qwen3.8-27b"]
+    assert pick_replacement_model("groq", groq, failed="llama-3.3-70b-versatile") == "openai/gpt-oss-120b"
+
+
+def test_send_message_recovers_from_retired_model(monkeypatch):
+    engine = _engine()
+    engine._client = SimpleNamespace()
+    engine._model_name = "gemini-2.5-flash"
+    saved = {}
+    monkeypatch.setattr("core.settings.update_settings", lambda changes: saved.update(changes))
+
+    class RetiredChat:
+        def send_message(self, msg):
+            raise RuntimeError("404 NOT_FOUND This model models/gemini-2.5-flash is no longer available")
+
+    class WorkingChat:
+        def send_message(self, msg):
+            return SimpleNamespace(text="hello from the new model")
+
+    engine._session_chats["default:default"] = RetiredChat()
+    engine._list_models = lambda provider: ["models/gemini-flash-latest", "models/gemini-2.5-flash"]
+    engine.create_chat_session = lambda *a, **k: WorkingChat()
+    engine._fallback_generate = lambda *a, **k: "fallback should not be needed"
+
+    assert engine.send_message("hi") == "hello from the new model"
+    assert engine.model_name == "gemini-flash-latest"
+    assert saved == {"gemini_model": "gemini-flash-latest"}

@@ -31,10 +31,12 @@ def get_primary_engine():
     return str(_setting("primary_engine", "gemini")).lower()
 
 def get_groq_model():
-    return _setting("groq_model", "llama-3.3-70b-versatile")
+    from core.brain.llm_providers import DEFAULT_GROQ_MODEL
+    return _setting("groq_model", DEFAULT_GROQ_MODEL)
 
 def get_model_name():
-    return _setting("gemini_model", "gemini-2.5-flash")
+    from core.brain.llm_providers import DEFAULT_GEMINI_MODEL
+    return _setting("gemini_model", DEFAULT_GEMINI_MODEL)
 
 
 # --- API Server / Network Exposure ---

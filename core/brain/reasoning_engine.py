@@ -27,7 +27,8 @@ except ImportError:
 
 from core.brain.llm_providers import (
     OpenAICompatibleClient, ProviderError, CircuitBreaker, classify_provider_error,
-    RATE_LIMIT, BAD_REQUEST, default_request_timeout, default_max_output_tokens,
+    RATE_LIMIT, BAD_REQUEST, MODEL_NOT_FOUND, pick_replacement_model,
+    DEFAULT_GROQ_MODEL, default_request_timeout, default_max_output_tokens,
     default_ollama_model, default_openai_model,
 )
 
@@ -75,6 +76,7 @@ class ReasoningEngine:
             name: CircuitBreaker(name) for name in ("gemini", "groq", "openai", "ollama")
         }
         self._last_error: Optional[str] = None
+        self._model_recovery_at: dict[str, float] = {}
 
         if HAS_GEMINI and self._api_key and not self.is_offline:
             try:
@@ -160,6 +162,64 @@ class ReasoningEngine:
             log.warning(f"[ReasoningEngine] {provider} unavailable ({kind}); retrying it in "
                         f"{self._breakers[provider].seconds_until_retry():.0f}s. Error: {str(error)[:120]}")
         return kind
+
+    # ─── Self-healing model selection ─────────────────────────────────────────
+
+    _MODEL_ATTR = {"gemini": "_model_name", "groq": "groq_model", "openai": "openai_model", "ollama": "ollama_model"}
+    _MODEL_SETTING = {"gemini": "gemini_model", "groq": "groq_model", "openai": "openai_model", "ollama": "ollama_model"}
+
+    def _list_models(self, provider: str) -> list:
+        import httpx
+        if provider == "gemini":
+            if self._client is None:
+                return []
+            out = []
+            for m in self._client.models.list():
+                actions = getattr(m, "supported_actions", None) or []
+                if not actions or "generateContent" in actions:
+                    out.append(m.name)
+            return out
+        if provider == "ollama":
+            url = f"{(self.ollama_host or '').rstrip('/')}/api/tags"
+            r = httpx.get(url, timeout=10)
+            return [m.get("name", "") for m in r.json().get("models", [])]
+        base, key = (GROQ_BASE_URL, self.groq_key) if provider == "groq" else (OPENAI_BASE_URL, self.openai_key)
+        r = httpx.get(f"{base}/models", headers={"Authorization": f"Bearer {key}"}, timeout=15)
+        r.raise_for_status()
+        return [m.get("id", "") for m in r.json().get("data", [])]
+
+    def _recover_model(self, provider: str) -> Optional[str]:
+        """
+        The provider says the configured model does not exist (retired or renamed). Pick a
+        current model from its live list, persist it to settings.json and return it.
+        At most one attempt per provider every 5 minutes.
+        """
+        now = time.monotonic()
+        if now - self._model_recovery_at.get(provider, -1e9) < 300:
+            return None
+        self._model_recovery_at[provider] = now
+        attr = self._MODEL_ATTR[provider]
+        current = getattr(self, attr, None)
+        try:
+            available = self._list_models(provider)
+        except Exception as e:
+            log.warning(f"[ReasoningEngine] Could not list {provider} models to replace '{current}': {e}")
+            return None
+        new_model = pick_replacement_model(provider, available, failed=current)
+        if not new_model or new_model == current:
+            return None
+        setattr(self, attr, new_model)
+        try:
+            from core.settings import update_settings
+            update_settings({self._MODEL_SETTING[provider]: new_model})
+        except Exception as e:
+            log.warning(f"[ReasoningEngine] Could not save model choice: {e}")
+        log.warning(f"[ReasoningEngine] {provider} model '{current}' is no longer available; "
+                    f"switched to '{new_model}' and saved it to settings.")
+        self._breakers[provider].reset()
+        if provider == "gemini":
+            self._session_chats.clear()   # chats are bound to the old model
+        return new_model
 
     def _make_session_key(self, session_id: Optional[str] = None, user_id: Optional[str] = None) -> str:
         sid = session_id or "default"
@@ -505,7 +565,15 @@ class ReasoningEngine:
                                             provider=provider, timeout=self.request_timeout)
             try:
                 log.info(f"Serving via {provider} fallback ({model}) with tools")
-                result = self._execute_fallback_with_tools(client, model, messages, session_key=key)
+                try:
+                    result = self._execute_fallback_with_tools(client, model, messages, session_key=key)
+                except Exception as first_err:
+                    if classify_provider_error(first_err) != MODEL_NOT_FOUND:
+                        raise
+                    new_model = self._recover_model(provider)
+                    if not new_model:
+                        raise
+                    result = self._execute_fallback_with_tools(client, new_model, messages, session_key=key)
                 breaker.record_success()
                 return result
             except Exception as e:
@@ -588,11 +656,12 @@ class ReasoningEngine:
                     temperature=0.2,
                     max_output_tokens=self.max_output_tokens,
                 )
-                res = self._client.models.generate_content(
-                    model=self._model_name,
-                    contents=prompt,
-                    config=config
-                )
+                try:
+                    res = self._client.models.generate_content(model=self._model_name, contents=prompt, config=config)
+                except Exception as first_err:
+                    if classify_provider_error(first_err) != MODEL_NOT_FOUND or not self._recover_model("gemini"):
+                        raise
+                    res = self._client.models.generate_content(model=self._model_name, contents=prompt, config=config)
                 self._breakers["gemini"].record_success()
                 if res and res.text:
                     return res.text
@@ -608,7 +677,7 @@ class ReasoningEngine:
         # Groq as a pure, stateless 1-shot completion WITHOUT tools and WITHOUT session history.
         if self.groq_key and not self.is_offline and self._breakers["groq"].allow():
             try:
-                groq_model = self.groq_model or "llama-3.3-70b-versatile"
+                groq_model = self.groq_model or DEFAULT_GROQ_MODEL
                 client = OpenAICompatibleClient(api_key=self.groq_key, base_url=GROQ_BASE_URL,
                                                 provider="groq", timeout=min(self.request_timeout, 15.0))
                 token_budget = 1000
@@ -666,6 +735,11 @@ class ReasoningEngine:
                     history.append({"role": "assistant", "content": text or ""})
                     return text or "[JARVIS returned an empty response]"
                 except Exception as e:
+                    if classify_provider_error(e) == MODEL_NOT_FOUND and self._recover_model("gemini"):
+                        chat = self.create_chat_session(self._system_prompt, self._tools,
+                                                        session_id=session_id, user_id=user_id)
+                        if chat is not None:
+                            continue
                     if self._should_retry_gemini(e, attempt):
                         self._last_error = str(e)
                         log.warning(f"Rate limit hit (attempt {attempt+1}/{self.MAX_RETRIES}). Retrying in {delay:.1f}s...")
@@ -732,6 +806,10 @@ class ReasoningEngine:
                 history.append({"role": "assistant", "content": full_response})
                 return
             except Exception as e:
+                if (not full_response and classify_provider_error(e) == MODEL_NOT_FOUND
+                        and self._recover_model("gemini")):
+                    chat = self.create_chat_session(system_prompt, self._tools, session_id=session_id, user_id=user_id)
+                    continue
                 if not full_response and self._should_retry_gemini(e, attempt):
                     time.sleep(delay)
                     delay *= self.BACKOFF_BASE

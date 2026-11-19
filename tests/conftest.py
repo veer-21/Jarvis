@@ -32,3 +32,17 @@ for _key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GROQ_API_KEY", "OPENAI_API_KEY
 def pytest_sessionfinish(session, exitstatus):
     # Chroma may still hold file handles on Windows; best effort only.
     shutil.rmtree(_TEST_ROOT, ignore_errors=True)
+
+
+def pytest_collection_modifyitems(config, items):
+    """Tests marked `desktop` launch real applications; they only run when explicitly enabled."""
+    import pytest
+    run_desktop = os.environ.get("JARVIS_RUN_DESKTOP_TESTS") == "1"
+    run_integration = os.environ.get("JARVIS_RUN_INTEGRATION_TESTS") == "1"
+    skip_desktop = pytest.mark.skip(reason="desktop test: set JARVIS_RUN_DESKTOP_TESTS=1 to run")
+    skip_integration = pytest.mark.skip(reason="live web/browser test: set JARVIS_RUN_INTEGRATION_TESTS=1 to run")
+    for item in items:
+        if not run_desktop and "desktop" in item.keywords:
+            item.add_marker(skip_desktop)
+        if not run_integration and "integration" in str(item.fspath).replace("\\", "/").split("/"):
+            item.add_marker(skip_integration)
