@@ -182,3 +182,12 @@ def test_dependency_manifest_lists_previously_missing_imports():
     for dep in ("httpx", "pywin32", "pywinauto", "pyperclip", "openpyxl", "edge-tts", "faster-whisper"):
         assert dep in text, dep
     assert (paths.PROJECT_ROOT / "uv.lock").exists()
+
+
+def test_memory_encryption_key_is_dpapi_protected():
+    from core.security import EncryptionEngine, KEY_FILE
+    engine = EncryptionEngine()
+    token = engine.encrypt("private note")
+    if os.name == "nt":
+        assert KEY_FILE.read_bytes().startswith(b"DPAPI1:")
+    assert EncryptionEngine().decrypt(token) == "private note"

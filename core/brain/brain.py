@@ -38,7 +38,7 @@ from core.agents.refiner_agent    import RefinerAgent
 
 # ─── Tool Module Imports ──────────────────────────────────────────────────────
 from tools.system_tools    import execute_command, schedule_task, list_scheduled_tasks
-from tools.file_tools      import read_file, write_file, list_directory, safe_delete_file, get_file_info, search_in_files, graphify_query
+from tools.file_tools      import read_file, write_file, list_directory, safe_delete_file, get_file_info, search_in_files, find_files, graphify_query
 from tools.web_tools       import web_search, fetch_webpage, get_weather, search_news
 from tools.automation_tools import (
     open_application, take_screenshot, get_system_info, press_key, type_text,
@@ -167,7 +167,7 @@ class Brain:
         self.tools.register_callable(list_scheduled_tasks, category="system")
 
         # File tools
-        for fn in [read_file, list_directory, get_file_info, search_in_files, graphify_query]:
+        for fn in [read_file, list_directory, get_file_info, search_in_files, find_files, graphify_query]:
             self.tools.register_callable(fn, category="file")
         self.tools.register_callable(write_file, category="file",
                                      risk_level=RiskLevel.MEDIUM, requires_confirmation=True)

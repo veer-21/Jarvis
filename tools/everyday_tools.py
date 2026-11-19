@@ -906,7 +906,7 @@ def manage_personal_notes_and_todos(
                 "title": record["title"],
                 "content": item_text,
                 "status": "pending",
-                "message": f"Added {cat} [{new_id}]: '{item_text}'"
+                "message": f"Added \"{item_text}\" to your {'to-dos' if cat == 'todo' else cat + 's'}."
             }
 
         elif act == "list":

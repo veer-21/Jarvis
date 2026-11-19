@@ -12,6 +12,14 @@ from enum import Enum
 from core.logger import log, error_log
 from core.security import guard, RiskLevel, UNTRUSTED_SOURCE_TOOLS
 from core.brain.task_model import current_turn_security
+
+
+def _activity(kind: str, **fields) -> None:
+    try:
+        from core.activity import record
+        record(kind, **fields)
+    except Exception:
+        pass
 from core.brain.tool_contract import ToolContract, ToolExecutionResult, ConfirmationPolicy, RetryPolicy
 from core.brain.verifier import ResultVerifier
 
@@ -471,6 +479,7 @@ class ToolRouter:
         )
         if not allowed:
             log.warning(f"Tool '{name}' blocked: {reason}")
+            _activity("blocked", tool=name, risk=eff_risk.value, reason=reason, args=args)
             return ToolExecutionResult(
                 success=False,
                 status="BLOCKED",
@@ -601,6 +610,10 @@ class ToolRouter:
                 "error fetching webpage" in result.lower() or
                 "error navigating" in result.lower()
             )
+
+            _activity("tool", tool=name, risk=eff_risk.value, args=args,
+                      ok=bool(ver_res.verified and not is_error_str),
+                      summary=result_summary, ms=round(elapsed_ms))
 
             # If post-conditions were unverified or tool returned error, fail execution
             if not ver_res.verified or is_error_str:

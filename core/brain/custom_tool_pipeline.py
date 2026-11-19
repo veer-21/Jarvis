@@ -651,7 +651,16 @@ except Exception:
 """
 
 
-DEFAULT_CUSTOM_DIR = Path(__file__).resolve().parent.parent.parent / "tools" / "custom"
+def _default_custom_dir() -> Path:
+    import sys as _sys
+    if getattr(_sys, "frozen", False):
+        # Installed app: program files are read-only, keep generated tools with the user's data.
+        from core.paths import data_dir
+        return data_dir() / "custom_tools"
+    return Path(__file__).resolve().parent.parent.parent / "tools" / "custom"
+
+
+DEFAULT_CUSTOM_DIR = _default_custom_dir()
 # Single quarantine location used by the pipeline, ToolRouter.load_custom_tools and the Refiner.
 QUARANTINE_DIRNAME = "_quarantine"
 DEFAULT_QUARANTINE_DIR = DEFAULT_CUSTOM_DIR / QUARANTINE_DIRNAME

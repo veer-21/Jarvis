@@ -1,223 +1,120 @@
-# JARVIS — Personal AI Operating System (v4.0–v8.0 Consumer Edition)
+# JARVIS — a private, local-first personal AI assistant for Windows
 
+JARVIS is a desktop assistant that chats with you, remembers what matters, and helps with
+everyday computer tasks (reminders, to-dos, files, web lookups, app control) — and **asks
+before it changes anything on your PC**.
+
+> **Status: beta.** Windows 10/11 only. "JARVIS" is a working title; the public product name is
+> still to be chosen (the name is a trademark of Marvel/Disney).
+
+- **Using JARVIS?** Read the [User Guide](USER_GUIDE.md) and the [Privacy Policy](PRIVACY.md).
+- **Releasing JARVIS?** See [docs/RELEASING.md](docs/RELEASING.md).
+
+---
+
+## What it does
+
+| Area | Examples |
+|---|---|
+| Conversation & memory | Natural chat with your chosen AI; remembers preferences and facts you share; "forget …" removes them |
+| Everyday | Reminders & timers, to-do list, daily briefing, clipboard helper, email drafts |
+| Files | List / read / search / write / organize (with undo), never touching secrets |
+| Web | Search, read and summarize pages, weather, news |
+| Computer | Open apps, system status, window control, optional voice |
+
+### Safety model
+
+- The backend only listens on `127.0.0.1` and rejects requests from other websites (Origin/Host checks).
+- Anything that writes, deletes, runs code or types into other apps shows a **permission prompt**.
+  High-risk actions always ask; low-risk ones can be "always allowed" by you.
+- After reading web content, state-changing actions need confirmation (prompt-injection defence).
+- Secrets (`.env`, SSH keys, browser data, JARVIS' own keys) are never read or searched.
+- API keys live in **Windows Credential Manager**; the memory encryption key is protected with DPAPI.
+- Every action is recorded in the **Activity** panel.
+
+---
+
+## Developer setup
+
+Requirements: Windows 10/11, [uv](https://docs.astral.sh/uv/) (Python 3.10 is installed by uv), Node.js 20+.
+
+```powershell
+uv sync --extra dev --extra voice      # Python deps from uv.lock (add --extra browser for Playwright)
+cd desktop; npm ci; npm run build; cd ..
 ```
-     ██╗ █████╗ ██████╗ ██╗   ██╗██╗███████╗
-     ██║██╔══██╗██╔══██╗██║   ██║██║██╔════╝
-     ██║███████║██████╔╝██║   ██║██║███████╗
-██   ██║██╔══██║██╔══██╗╚██╗ ██╔╝██║╚════██║
-╚█████╔╝██║  ██║██║  ██║ ╚████╔╝ ██║███████║
- ╚════╝ ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝╚══════╝
-  Just A Rather Very Intelligent System — Consumer Edition
-```
 
-> **JARVIS v4.0–v8.0 Consumer Edition**: 210 Automated Tests (100% Passing) • Everyday Mode Glassmorphic UI • 40+ Verified Tools • 9-Stage Cognitive Orchestrator • Persistent Reminder Recovery on Boot • 1-Click Desktop Shortcut • Smart Email Composer
+Run it:
 
-📖 **For everyday usage instructions, see [USER_GUIDE.md](file:///D:/Jarvis/USER_GUIDE.md).**
+| How | Command |
+|---|---|
+| Desktop app (starts its own backend) | `Start_Jarvis_Desktop.bat` or `cd desktop; npm run electron:prod` |
+| Desktop app with hot reload | `cd desktop; npm run electron:dev` |
+| Browser UI | `Start_Jarvis.bat` (backend + http://127.0.0.1:7799) |
+| Terminal chat | `uv run python main.py --text` |
+
+AI keys: use the setup wizard / Settings in the app (stored in Credential Manager), or put them in
+`.env` (see [.env.example](.env.example)). Model names are self-healing: if a provider retires a
+model, JARVIS picks a current one and saves it to `settings.json`.
+
+### Where data lives
+
+| What | Location |
+|---|---|
+| Memory, tasks, settings, activity, keys (DPAPI) | `%LOCALAPPDATA%\JARVIS` (existing dev installs keep using `<repo>\data`) |
+| Logs | `<data dir>\logs` (dev installs: `<repo>\logs`) |
+| Desktop-app backend log | `%APPDATA%\JARVIS\logs\backend.log` |
+| API keys | Windows Credential Manager → "JARVIS/…" |
+
+Override with `JARVIS_DATA_DIR` / `JARVIS_LOG_DIR`.
 
 ---
 
 ## Architecture
 
 ```
-jarvis/
-├── main.py                  ← Unified entry point (CLI + API launcher)
-├── requirements.txt
-├── .env                     ← API keys & config
-│
-├── core/
-│   ├── brain.py             ← AI reasoning engine (Gemini + tools)
-│   ├── memory.py            ← ChromaDB semantic memory
-│   ├── planner.py           ← Multi-step autonomous task planner
-│   ├── voice.py             ← STT + TTS interface
-│   ├── security.py          ← Encryption, auth, audit log
-│   ├── logger.py            ← Rotating JSON logs
-│   ├── config.py            ← Environment config
-│   └── system_prompt.py     ← JARVIS personality & rules
-│
-├── tools/
-│   ├── system_tools.py      ← Shell command execution (security-gated)
-│   ├── file_tools.py        ← File read/write/delete/search
-│   ├── web_tools.py         ← Web search, page fetch, weather, news
-│   ├── browser_tools.py     ← Playwright browser automation
-│   └── automation_tools.py  ← Screenshot, keyboard, mouse, system info
-│
-├── api/
-│   ├── server.py            ← FastAPI REST + WebSocket backend
-│   ├── models.py            ← Pydantic schemas
-│   └── auth.py              ← JWT authentication
-│
-├── ui/
-│   └── index.html           ← Futuristic dashboard UI
-│
-├── data/                    ← Created automatically at runtime
-│   ├── memory/              ← ChromaDB + conversation JSON
-│   └── security/            ← Encrypted PIN + Fernet key
-│
-└── logs/                    ← Rotating log files
-    ├── jarvis.log
-    ├── audit.log
-    └── error.log
+desktop/ (Electron + React)          browser (same React build served at /)
+   │  spawns backend, local-token login        │  PIN login
+   └──────────────► api/server.py (FastAPI, 127.0.0.1:7799, REST + WebSocket)
+                        │
+                core/brain/brain.py ── AssistantOrchestrator (plan → execute → verify → remember)
+                        │                 ├─ IntentClassifier (instant local answers)
+                        │                 ├─ heuristic planner + chat session with safe tools
+                        │                 └─ ToolRouter → SecurityGuard (risk, confirmation, audit)
+                        ├─ ReasoningEngine → llm_providers (Gemini, Groq/OpenAI/Ollama, circuit breakers)
+                        ├─ memory (ChromaDB + crash-safe JSON mirror, owner-scoped, secrets redacted)
+                        └─ tools/ (files, web, everyday, automation, UIA/COM, REPL)
 ```
 
+Key modules: `core/paths.py` (all locations), `core/settings.py` + `core/secrets_store.py`
+(configuration), `core/security.py` (policy), `core/activity.py` (activity journal),
+`core/os_adapter.py` (OS integrations), `core/diagnostics.py` (support bundle, opt-in crash reports).
+
 ---
 
-## Quick Start
+## Tests & quality gates
 
-### 1. Set up Environment
-
-```bash
-# Clone / navigate to the project
-cd "d:\Home\H.W. OR Self\Jarvis"
-
-# Create virtual environment (already done)
-python -m venv venv
-venv\Scripts\activate
-
-# Install all dependencies
-pip install -r requirements.txt
-
-# Install Playwright browser (for web automation)
-playwright install chromium
+```powershell
+uv run pytest -q                       # isolated temp data dir, no live AI calls
+uv run python scripts/run_eval.py      # routing evaluation (expected path for realistic requests)
+uvx ruff@0.8.4 check .                 # lint gate
 ```
 
-### 2. Configure `.env`
+Opt-in suites: `JARVIS_RUN_DESKTOP_TESTS=1` (launches real apps), `JARVIS_RUN_INTEGRATION_TESTS=1`
+(live web/browser). CI runs lint, the UI build, tests and the eval on every push
+(`.github/workflows/ci.yml`).
 
-Edit `.env` and set your Gemini API key:
+## Building the installer
 
-```env
-GEMINI_API_KEY=your_key_here
-GEMINI_MODEL=gemini-2.0-flash
+```powershell
+uv sync --extra packaging --extra voice
+uv run python scripts/build_installer.py          # -> desktop\release\JARVIS Setup <version>.exe
 ```
 
-### 3. Run JARVIS
+The backend is bundled with PyInstaller (no Python needed on users' PCs) and the app is packaged
+with electron-builder (NSIS). Tagging `v*` builds and publishes a release automatically.
 
-```bash
-# Text mode (default)
-python main.py
+## Maintenance scripts
 
-# Voice mode
-python main.py --voice
-
-# Execute a single autonomous task
-python main.py --task "Search the web for AI news and write a summary"
-
-# Start the API server + UI
-python main.py --api
-
-# System status only
-python main.py --status
-```
-
-### 4. Open the Dashboard
-
-With `python main.py --api` running:
-
-1. Open `ui/index.html` in your browser (double-click the file or run `start ui\index.html` in your terminal).
-2. The authentication screen will appear. If this is your **first run**, you can leave the PIN blank and just click "AUTHENTICATE" to proceed. Otherwise, enter your PIN.
-3. The UI will connect to the backend at `http://localhost:7799`.
-
----
-
-## Troubleshooting
-
-### "Invalid or expired token" Error
-If you see a `System Error: {"detail":"Invalid or expired token."}` in the UI:
-1. **Cause:** Your security session (JWT token) has expired (default is 12 hours) or the server restarted and the token in your browser no longer matches.
-2. **Solution:** 
-   - Click the **LOGOUT** button in the top right corner of the dashboard.
-   - This will clear the expired token from your browser's local storage.
-   - Re-authenticate with your PIN (or leave blank if none was set).
-   - *(Note: We've recently patched the UI to handle this automatically, so you should simply be redirected to the login screen going forward).*
-
-### API Server Not Connecting
-- Ensure `python main.py --api` is running in your terminal.
-- Check that the `.env` file exists and `JARVIS_API_PORT` matches what the UI expects (7799).
-
----
-
-## Available Tools (20 registered)
-
-| Category | Tools |
-|----------|-------|
-| **System** | `execute_command` |
-| **Files** | `read_file`, `write_file`, `list_directory`, `safe_delete_file`, `get_file_info`, `search_in_files` |
-| **Web** | `web_search`, `fetch_webpage`, `get_weather`, `search_news` |
-| **Automation** | `open_application`, `take_screenshot`, `get_system_info`, `press_key`, `type_text` |
-| **Browser** | `open_url`, `get_page_text`, `browser_screenshot`, `browser_click`, `browser_fill` |
-
----
-
-## API Reference
-
-Base URL: `http://localhost:7799`
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/auth/login` | Authenticate, get JWT token |
-| POST | `/auth/set-pin` | Set owner PIN |
-| POST | `/chat` | Chat (sync) |
-| POST | `/chat/stream` | Chat (SSE streaming) |
-| WS | `/ws/stream` | WebSocket real-time chat |
-| GET | `/history` | Conversation history |
-| POST | `/task` | Autonomous task execution |
-| POST | `/memory/search` | Semantic memory search |
-| POST | `/memory` | Store memory |
-| POST | `/memory/preference` | Set preference |
-| GET | `/status` | System health |
-| GET | `/docs` | Auto-generated API docs |
-
----
-
-## Security Model
-
-- **Owner PIN** — bcrypt-hashed, stored in `data/security/`
-- **Fernet Encryption** — Sensitive memory encrypted at rest
-- **JWT Sessions** — 12-hour expiry, issued on successful auth
-- **Command Gating** — All shell commands assessed by risk level (SAFE→CRITICAL)
-- **Audit Log** — All tool executions logged to `logs/audit.log`
-- **File Restrictions** — System paths (`C:\Windows`, etc.) blocked from write/delete
-- **Action Confirmation** — Destructive actions always require interactive `yes/no`
-
----
-
-## Memory System
-
-JARVIS uses **ChromaDB** for semantic vector memory when installed, falling back to JSON keyword search.
-
-**Categories:**
-- `conversation` — Turn-by-turn dialogue
-- `preference` — Owner preferences
-- `task` — Completed tasks
-- `knowledge` — General learned information
-- `workflow` — Saved automation sequences
-
-Memory is injected into each prompt automatically (top-5 relevant entries).
-
----
-
-## Built-in CLI Commands
-
-While in text mode:
-
-| Command | Action |
-|---------|--------|
-| `exit` / `quit` | Shutdown JARVIS |
-| `status` | Print system status |
-| `task: <description>` | Execute autonomous task |
-| `reset` | Reset chat session |
-| `memory stats` | Show memory statistics |
-
----
-
-## Development Phases
-
-- [x] **Phase 1** — Foundation (structure, config, logging)
-- [x] **Phase 2** — Core AI (Gemini brain, streaming, retry)
-- [x] **Phase 3** — Voice (STT + TTS, Google + Whisper)
-- [x] **Phase 4** — Tools (system, file, web, browser, automation)
-- [x] **Phase 5** — Memory (ChromaDB + JSON fallback)
-- [x] **Phase 6** — Agent Planner (decompose + execute + retry)
-- [x] **Phase 7** — UI/UX (futuristic dashboard)
-- [x] **Phase 8** — Security (auth, encryption, audit)
-- [ ] **Phase 9** — Vision (OCR, screenshot analysis)
-- [ ] **Phase 10** — Advanced Agents (LangGraph multi-agent)
+- `scripts/memory_maintenance.py` — report, clean test data, adopt unowned records, rebuild the
+  semantic index from the JSON mirror (preview unless `--apply`).
+- `scripts/legacy/` — old one-off scripts kept for reference (not part of the product or tests).

@@ -27,6 +27,7 @@ Run with:
     uvicorn api.server:app --host 127.0.0.1 --port 7799 --reload
 """
 
+import os
 import time
 import json
 import asyncio
@@ -97,6 +98,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from dotenv import load_dotenv
     load_dotenv()
     from core.config import get_api_key
+    try:
+        from core.diagnostics import init_crash_reporting
+        init_crash_reporting()   # no-op unless the user opted in AND a DSN is configured
+    except Exception:
+        pass
 
     try:
         try:
@@ -592,6 +598,14 @@ async def websocket_jarvis(ws: WebSocket):
                     async for chunk in brain.process_input_stream(message, interrupt_event=cancel_token, context=ctx):
                         if cancel_token.is_set():
                             break
+                        # LLM tokens are pushed by the StreamingManager itself. Everything else
+                        # (instant answers, tool results, errors) must be forwarded here, or the
+                        # app never shows the reply.
+                        if chunk and not ctx.streamed_via_socket:
+                            if chunk.startswith("[PLANNING]"):
+                                await ws_manager.send_status_to_session(session_id, "THINKING")
+                            else:
+                                await ws_manager.send_chunk_to_session(session_id, chunk)
                         await asyncio.sleep(0)
                         
                     await ws_manager.send_stream_end_to_session(session_id)
@@ -648,6 +662,8 @@ async def websocket_jarvis(ws: WebSocket):
                 conn_session_id = ws_manager.get_session_id(ws)
                 conn_user_id = ws_manager.get_user_id(ws)
                 from core.security import guard
+                with guard._confirm_lock:
+                    _pending = dict(guard._pending_confirmations.get(conf_id) or {})
                 success = guard.submit_confirmation(
                     conf_id,
                     approved,
@@ -661,6 +677,7 @@ async def websocket_jarvis(ws: WebSocket):
                     "success": success
                 })
                 if success:
+                    _record_permission_decision(_pending, approved, bool(data.get("always_allow")))
                     ws_manager.send_confirmation_to_session(conn_session_id, {
                         "type": "CONFIRMATION_PROCESSED",
                         "confirmation_id": conf_id,
@@ -1092,14 +1109,23 @@ async def respond_confirmation(confirmation_id: str, body: ConfirmationRequest, 
 
 
 # ─── Static UI Serving ────────────────────────────────────────────────────────
-ui_path = Path(__file__).parent.parent / "ui"
-if ui_path.exists():
-    app.mount("/ui", StaticFiles(directory=str(ui_path)), name="ui")
+# One UI for everyone: the React app in desktop/ is built once (npm run build) and is loaded
+# by the Electron window *and* served here for browser access.
 
-    @app.get("/", tags=["UI"])
-    async def serve_ui():
-        """Redirect root to the UI."""
-        return FileResponse(str(ui_path / "index.html"))
+def _ui_dist_dir() -> Optional[Path]:
+    import sys as _sys
+    candidates = [os.environ.get("JARVIS_UI_DIR"),
+                  str(Path(getattr(_sys, "_MEIPASS", "")) / "ui") if getattr(_sys, "_MEIPASS", None) else None,
+                  str(_PROJECT_ROOT / "desktop" / "dist")]
+    for c in candidates:
+        if c and (Path(c) / "index.html").exists():
+            return Path(c)
+    return None
+
+
+_UI_DIST = _ui_dist_dir()
+if _UI_DIST is not None and (_UI_DIST / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=str(_UI_DIST / "assets")), name="ui-assets")
 
 
 # ─── Memory Routes ────────────────────────────────────────────────────────────
@@ -1220,16 +1246,14 @@ async def get_status(auth: AuthRequired):
 
 @app.get("/", tags=["System"])
 async def root():
-    """API root — serves the Mission Control UI dashboard."""
-    ui_path = Path(__file__).parent.parent / "ui" / "index.html"
-    if ui_path.exists():
-        return FileResponse(ui_path, media_type="text/html")
+    """Serve the JARVIS app UI (or a build hint when the UI has not been built yet)."""
+    if _UI_DIST is not None:
+        return FileResponse(_UI_DIST / "index.html", media_type="text/html")
     return {
-        "name":    "JARVIS AI Operating System",
-        "version": "3.0.0",
-        "status":  "online",
-        "architecture": "modular-multi-agent",
-        "docs":    "/docs",
+        "name": "JARVIS",
+        "status": "online",
+        "ui": "not built - run: cd desktop && npm install && npm run build",
+        "docs": "/docs",
     }
 
 
@@ -1310,6 +1334,125 @@ async def trigger_optimization(auth: AuthRequired):
         else:
             raise HTTPException(status_code=500, detail=res.content)
     raise HTTPException(status_code=503, detail="Refiner Agent not available.")
+
+
+# ─── Desktop-app helpers: local login, activity, provider checks ────────────
+
+import secrets as _secrets
+from pydantic import BaseModel as _BaseModel, Field as _Field
+from typing import Literal as _Literal
+
+
+def _record_permission_decision(pending: dict, approved: bool, always_allow: bool) -> None:
+    """Journal a permission decision and honour "always allow" for low/moderate-risk tools."""
+    tool = pending.get("tool_name") or pending.get("tool")
+    risk = str(pending.get("risk_level") or pending.get("risk") or "")
+    try:
+        from core.activity import record
+        record("permission", tool=tool, approved=approved, risk=risk, always_allow=always_allow and approved)
+    except Exception:
+        pass
+    if approved and always_allow and tool and risk not in ("HIGH_RISK", "CRITICAL"):
+        try:
+            from core.settings import load_settings, update_settings
+            allowed = list(load_settings().always_allow_tools or [])
+            if tool not in allowed:
+                update_settings({"always_allow_tools": allowed + [tool]})
+        except Exception as e:
+            error_log.error(f"Could not save always-allow choice: {e}")
+
+
+class LocalAuthRequest(_BaseModel):
+    token: str = _Field(min_length=1, max_length=256)
+
+
+@app.post("/auth/local", response_model=AuthResponse, tags=["Auth"])
+async def local_login(body: LocalAuthRequest):
+    """
+    Desktop-app login. Electron generates a random per-launch secret, passes it to the backend
+    it spawns (JARVIS_LOCAL_TOKEN) and to its own window over IPC. Web pages can never read it.
+    """
+    expected = os.environ.get("JARVIS_LOCAL_TOKEN", "")
+    if len(expected) < 32 or not _secrets.compare_digest(body.token, expected):
+        raise HTTPException(status_code=401, detail="Invalid local session token.")
+    token, expires = create_access_token()
+    return AuthResponse(access_token=token, expires_in=expires, message="Desktop session established.")
+
+
+@app.get("/activity", tags=["Activity"])
+async def get_activity(auth: AuthRequired, limit: int = 100):
+    """What JARVIS did on this computer: tool runs, blocked actions, permission decisions."""
+    from core.activity import recent
+    return {"entries": recent(max(1, min(limit, 500)))}
+
+
+class ProviderTestRequest(_BaseModel):
+    provider: _Literal["gemini", "groq", "openai", "ollama"]
+    api_key: Optional[str] = _Field(default=None, max_length=500)
+    host: Optional[str] = _Field(default=None, max_length=200)
+
+
+def _check_provider(provider: str, api_key: Optional[str], host: Optional[str]) -> dict:
+    """Validate credentials by listing models (free; never generates text)."""
+    import httpx
+    from core.secrets_store import resolve
+    if provider == "ollama":
+        base = (host or os.environ.get("OLLAMA_HOST") or "http://127.0.0.1:11434").rstrip("/")
+        r = httpx.get(f"{base}/api/tags", timeout=5)
+        r.raise_for_status()
+        return {"models": [m.get("name") for m in r.json().get("models", [])]}
+    key_name = {"gemini": "GEMINI_API_KEY", "groq": "GROQ_API_KEY", "openai": "OPENAI_API_KEY"}[provider]
+    key = api_key or resolve(key_name, *(["GOOGLE_API_KEY"] if provider == "gemini" else []))
+    if not key:
+        raise ValueError("No API key configured for this provider.")
+    if provider == "gemini":
+        from google import genai
+        client = genai.Client(api_key=key)
+        return {"models": [m.name.replace("models/", "") for m in client.models.list()][:50]}
+    base = "https://api.groq.com/openai/v1" if provider == "groq" else "https://api.openai.com/v1"
+    r = httpx.get(f"{base}/models", headers={"Authorization": f"Bearer {key}"}, timeout=15)
+    r.raise_for_status()
+    return {"models": [m.get("id") for m in r.json().get("data", [])][:50]}
+
+
+@app.post("/settings/test-provider", tags=["Settings"])
+async def test_provider_route(body: ProviderTestRequest, auth: AuthRequired):
+    try:
+        info = await asyncio.to_thread(_check_provider, body.provider, body.api_key, body.host)
+        return {"ok": True, "message": f"Connected to {body.provider}.", "models": info.get("models", [])[:20]}
+    except Exception as e:
+        from core.brain.llm_providers import classify_provider_error
+        kind = classify_provider_error(e)
+        friendly = {
+            "auth": "That key was rejected. Check that you copied the whole key from the provider's website.",
+            "rate_limit": "The provider says this key is over its quota right now. Try again later or use another key.",
+            "service": "Could not reach the provider. Check your internet connection and try again.",
+        }.get(kind)
+        if friendly is None:
+            friendly = str(e) if isinstance(e, ValueError) else "The provider did not accept this key."
+        error_log.warning(f"Provider check failed for {body.provider}: {kind}")
+        return {"ok": False, "message": friendly, "models": []}
+
+
+@app.get("/diagnostics/export", tags=["Support"])
+async def export_diagnostics(auth: AuthRequired):
+    """Support bundle (zip): system info, settings, provider health, activity, redacted log tails."""
+    from fastapi.responses import Response
+    from core.diagnostics import build_diagnostics_zip
+    health = _brain.reasoning.provider_health() if _brain is not None and hasattr(_brain.reasoning, "provider_health") else None
+    data = await asyncio.to_thread(build_diagnostics_zip, health)
+    return Response(content=data, media_type="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="jarvis-diagnostics.zip"'})
+
+
+@app.get("/settings/ollama", tags=["Settings"])
+async def ollama_status_route(auth: AuthRequired):
+    """Is a local Ollama server running, and which models does it have?"""
+    try:
+        info = await asyncio.to_thread(_check_provider, "ollama", None, None)
+        return {"running": True, "models": info.get("models", [])}
+    except Exception:
+        return {"running": False, "models": [], "install_url": "https://ollama.com/download"}
 
 
 # ─── Settings Routes ──────────────────────────────────────────────────────────

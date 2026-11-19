@@ -121,7 +121,8 @@ def _atomic_write_json(path: Path, data) -> None:
 # Keywords that indicate a memory is worth storing long-term
 _IMPORTANCE_KEYWORDS = {
     "prefer", "always", "never", "remember", "my name", "i like", "i hate",
-    "i want", "i need", "important", "favorite",
+    "i want", "i need", "important", "favorite", "favourite", "allergic", "my birthday",
+    "i live in", "i work at", "i work as",
     "setting", "config", "schedule", "workflow", "automate", "save",
     "don't forget", "note that", "keep in mind", "fyi",
 }
@@ -141,7 +142,9 @@ def score_importance(content: str, role: str = "user") -> float:
     score = 0.0
 
     # Length bonus — very short messages are rarely important
-    if len(content) < 30:
+    # Very short messages ("ok", "thanks") are rarely worth keeping; short facts
+    # ("I'm allergic to nuts") are, so only penalise the shortest ones.
+    if len(content) < 12:
         score -= 0.3
     elif len(content) > 200:
         score += 0.1

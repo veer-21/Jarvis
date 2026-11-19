@@ -87,6 +87,14 @@ def _stdin_is_interactive() -> bool:
 CRITICAL_PROCESSES = ["explorer.exe", "dwm.exe", "lsass.exe", "csrss.exe", "smss.exe", "services.exe", "wininit.exe"]
 
 
+def _always_allowed_tools() -> set:
+    try:
+        from core.settings import load_settings
+        return set(load_settings().always_allow_tools or [])
+    except Exception:
+        return set()
+
+
 def hard_block_reason(command: str) -> Optional[str]:
     """
     Commands that are never allowed, regardless of owner approval.
@@ -236,17 +244,50 @@ class EncryptionEngine:
             self._key = self._load_or_generate_key()
             self._fernet = Fernet(self._key)
 
-    def _load_or_generate_key(self) -> bytes:
-        """Load existing key or generate and persist a new one."""
-        if KEY_FILE.exists():
-            return KEY_FILE.read_bytes()
-        key = Fernet.generate_key()
-        KEY_FILE.write_bytes(key)
-        # Restrict file permissions on creation (best-effort on Windows)
+    _DPAPI_PREFIX = b"DPAPI1:"
+
+    @classmethod
+    def _protect(cls, raw: bytes) -> bytes:
+        """Wrap the key with Windows DPAPI (only this Windows user can unwrap it)."""
+        try:
+            import win32crypt
+            blob = win32crypt.CryptProtectData(raw, "JARVIS memory key", None, None, None, 0)
+            return cls._DPAPI_PREFIX + base64.b64encode(blob)
+        except Exception:
+            return raw  # non-Windows or pywin32 missing: plain key file (previous behaviour)
+
+    @classmethod
+    def _unprotect(cls, stored: bytes) -> bytes:
+        if not stored.startswith(cls._DPAPI_PREFIX):
+            return stored
+        import win32crypt
+        return win32crypt.CryptUnprotectData(base64.b64decode(stored[len(cls._DPAPI_PREFIX):]),
+                                             None, None, None, 0)[1]
+
+    @staticmethod
+    def _write_key_file(content: bytes) -> None:
+        tmp = KEY_FILE.with_name(KEY_FILE.name + ".tmp")
+        tmp.write_bytes(content)
+        os.replace(tmp, KEY_FILE)
         try:
             KEY_FILE.chmod(0o600)
         except Exception:
             pass
+
+    def _load_or_generate_key(self) -> bytes:
+        """Load the key (unwrapping DPAPI protection) or generate and persist a new one."""
+        if KEY_FILE.exists():
+            stored = KEY_FILE.read_bytes().strip()
+            key = self._unprotect(stored)
+            if not stored.startswith(self._DPAPI_PREFIX):
+                protected = self._protect(key)
+                if protected != key:
+                    # One-time migration of a legacy plain-text key file.
+                    self._write_key_file(protected)
+                    log.info("Encryption key is now protected with Windows DPAPI.")
+            return key
+        key = Fernet.generate_key()
+        self._write_key_file(self._protect(key))
         log.info("Generated new Fernet encryption key")
         return key
 
@@ -665,8 +706,15 @@ class SecurityGuard:
             else:
                 effective_risk = RiskLevel.LOW_RISK
         elif t_low in ("smart_organize_folder", "undo_folder_organization"):
-            if effective_risk not in (RiskLevel.HIGH_RISK, RiskLevel.CRITICAL):
-                effective_risk = RiskLevel.MODERATE_RISK
+            if t_low == "smart_organize_folder" and args.get("dry_run") in (True, "true", "True", 1):
+                # A preview only lists what would move; nothing changes on disk.
+                effective_risk = RiskLevel.READ_ONLY
+                declared_requires_confirmation = False
+            else:
+                if effective_risk not in (RiskLevel.HIGH_RISK, RiskLevel.CRITICAL):
+                    effective_risk = RiskLevel.MODERATE_RISK
+                # Moving the user's files always needs their OK.
+                declared_requires_confirmation = True
         elif t_low == "create_reminder_or_timer":
             if effective_risk not in (RiskLevel.MODERATE_RISK, RiskLevel.HIGH_RISK, RiskLevel.CRITICAL):
                 effective_risk = RiskLevel.LOW_RISK
@@ -717,6 +765,12 @@ class SecurityGuard:
             effective_risk in (RiskLevel.HIGH_RISK, RiskLevel.CRITICAL)
             or bool(declared_requires_confirmation)
         )
+        # Owner's "always allow" list (set from the permission prompt). Never applies to
+        # HIGH/CRITICAL actions, and the untrusted-content rule below still re-applies.
+        if (requires_confirmation and not untrusted_context
+                and effective_risk not in (RiskLevel.HIGH_RISK, RiskLevel.CRITICAL)
+                and tool_name in _always_allowed_tools()):
+            requires_confirmation = False
         if (untrusted_context and not requires_confirmation
                 and untrusted_context_requires_confirmation(tool_name, args, effective_risk)):
             requires_confirmation = True

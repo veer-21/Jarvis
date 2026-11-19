@@ -333,7 +333,7 @@ def run_single_task(brain: JarvisBrain, task: str) -> None:
     print(result)
 
 
-def run_api_server() -> None:
+def run_api_server(open_browser_tab: bool = True) -> None:
     """Start the FastAPI backend server."""
     try:
         import uvicorn
@@ -347,7 +347,8 @@ def run_api_server() -> None:
             print("\n[JARVIS] Launching Dashboard UI in your default browser...")
             webbrowser.open("http://localhost:7799/")
             
-        threading.Timer(1.5, open_browser).start()
+        if open_browser_tab:
+            threading.Timer(1.5, open_browser).start()
         
         from core.config import get_api_host, get_api_port
         uvicorn.run(
@@ -382,6 +383,7 @@ def main() -> None:
     parser.add_argument("--text",   action="store_true", help="Run in text interaction mode (default)")
     parser.add_argument("--task",   type=str,            help="Execute a single autonomous task")
     parser.add_argument("--api",    action="store_true", help="Start the FastAPI backend server")
+    parser.add_argument("--no-browser", action="store_true", help="With --api: do not open a browser tab")
     parser.add_argument("--status", action="store_true", help="Print system status and exit")
     parser.add_argument("--offline", action="store_true", help="Run in local offline mode (requires Ollama)")
     parser.add_argument("--brain-init", action="store_true", help="Initialize the Project Brain documentation templates")
@@ -400,7 +402,7 @@ def main() -> None:
     if args.api:
         if args.voice:
             os.environ["JARVIS_VOICE_MODE"] = "1"
-        run_api_server()
+        run_api_server(open_browser_tab=not args.no_browser)
         return
 
     # Bootstrap all systems

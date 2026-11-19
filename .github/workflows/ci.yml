@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Python dependencies (locked)
+        run: uv sync --frozen --extra dev --extra voice --extra telemetry
+
+      - name: Lint (syntax errors and undefined names)
+        run: uvx ruff@0.8.4 check .
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Build desktop UI
+        working-directory: desktop
+        run: |
+          npm ci
+          npm run build
+
+      - name: Tests (isolated data dir, no live AI calls)
+        run: uv run pytest -q
+
+      - name: Routing evaluation
+        run: uv run python scripts/run_eval.py

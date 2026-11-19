@@ -60,7 +60,10 @@ class MemoryPolicy:
         
         # 1. Check for explicit memory deletion requests
         if re.search(r"\b(delete|forget|remove)\b.*\b(memory|memories|preference|preferences)\b"
-                     r"(?!\s+(?:card|stick|usage|leak|slot|module))", text, re.I):
+                     r"(?!\s+(?:card|stick|usage|leak|slot|module))", text, re.I) or \
+           re.match(r"^\s*(?:please\s+)?(?:jarvis,?\s+)?forget\s+(?!it\b|about it\b|that\s*$)\S", text, re.I):
+            # "Forget my favourite colour", "forget that I like jazz" (but not "forget it" /
+            # "don't forget to buy milk")
             return MemoryTier.DO_NOT_STORE, "delete_request"
 
         # 1b. Credentials are never kept in long-term memory (conversation turns are redacted).

@@ -152,14 +152,14 @@ def test_consumer_documentation_and_launchers_exist():
     assert user_guide.exists(), "USER_GUIDE.md must exist"
     content_ug = user_guide.read_text(encoding="utf-8")
     assert "Everyday Mode" in content_ug
-    assert "1-Click Daily Routine Cards" in content_ug
-    assert "Alt + Space" in content_ug
+    assert "1-Click Daily Routines" in content_ug
+    assert "Ctrl + Shift + J" in content_ug
     assert len(content_ug) > 1000
 
     readme = root / "README.md"
     assert readme.exists(), "README.md must exist"
     content_readme = readme.read_text(encoding="utf-8")
-    assert "v4.0–v8.0 Consumer Edition" in content_readme
+    assert "PRIVACY.md" in content_readme
     assert "USER_GUIDE.md" in content_readme
 
     start_web = root / "Start_Jarvis.bat"

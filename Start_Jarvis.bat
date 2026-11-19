@@ -1,9 +1,9 @@
 @echo off
 setlocal enabledelayedexpansion
-title JARVIS AI Operating System — Consumer Web Launcher
+title JARVIS - Browser Launcher
 
 echo ======================================================================
-echo             JARVIS AI Operating System (v3.0) — Launching...
+echo             JARVIS - starting in your browser...
 echo ======================================================================
 echo.
 
@@ -26,9 +26,9 @@ if not exist "venv\Scripts\python.exe" (
 
 :: 3. Launch Python backend in a new minimized window
 echo [INFO] Starting JARVIS backend server...
-start "JARVIS Backend" /min "venv\Scripts\python.exe" main.py
+start "JARVIS Backend" /min "venv\Scripts\python.exe" main.py --api --no-browser
 
-:: 4. Poll http://127.0.0.1:7799/health (up to 12 attempts = ~12s)
+:: 4. Poll http://127.0.0.1:7799/health (up to 60 attempts = ~60s; first start loads models)
 echo [INFO] Waiting for JARVIS backend to become healthy...
 set /a ATTEMPTS=0
 
@@ -40,7 +40,7 @@ if %ERRORLEVEL% EQU 0 (
     goto OPEN_BROWSER
 )
 
-if %ATTEMPTS% GEQ 12 (
+if %ATTEMPTS% GEQ 60 (
     echo [WARNING] Backend is taking longer than usual to respond. Opening browser anyway...
     goto OPEN_BROWSER
 )
@@ -50,7 +50,7 @@ goto POLL_LOOP
 
 :OPEN_BROWSER
 echo.
-echo [INFO] Opening JARVIS Mission Control in your default browser...
+echo [INFO] Opening JARVIS in your default browser...
 start http://127.0.0.1:7799
 echo.
 echo ======================================================================

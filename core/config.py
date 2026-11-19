@@ -91,7 +91,9 @@ def get_allowed_hosts() -> list[str]:
 
 # --- Voice Settings ---
 def get_voice_engine():
-    return _setting("voice_engine", "edge-tts")  # Options: edge-tts, elevenlabs
+    # sapi = offline Windows voice (default, no internet); edge-tts = online neural voice;
+    # elevenlabs = premium cloud voice (needs a key)
+    return _setting("voice_engine", "sapi")
 
 def get_voice_profile():
     return _setting("voice_profile", "Jarvis Classic")

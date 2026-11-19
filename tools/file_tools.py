@@ -272,6 +272,69 @@ def get_file_info(path: str) -> str:
         return f"Error getting file info: {str(e)}"
 
 
+_KNOWN_FOLDERS = {
+    "downloads": "Downloads", "documents": "Documents", "docs": "Documents", "desktop": "Desktop",
+    "pictures": "Pictures", "photos": "Pictures", "music": "Music", "videos": "Videos",
+}
+
+
+def resolve_user_folder(name: str) -> Path:
+    """'Downloads' / 'my documents' / '~/x' / absolute path -> a real folder path."""
+    raw = (name or "").strip().strip('"')
+    key = raw.lower().replace("my ", "").strip()
+    if key in _KNOWN_FOLDERS:
+        return Path.home() / _KNOWN_FOLDERS[key]
+    if key in ("", "home", "my files", "files"):
+        return Path.home()
+    return Path(os.path.expandvars(os.path.expanduser(raw))).resolve()
+
+
+def find_files(directory: str = "Documents", pattern: str = "*", max_results: int = 50) -> str:
+    """
+    Find files by name or type (e.g. pattern '*.pdf' or '*.jpg;*.png') inside a folder and its
+    subfolders. Use this to locate files; use search_in_files to search text inside files.
+
+    Args:
+        directory:   Folder to search: 'Downloads', 'Documents', 'Desktop', 'Pictures' or a path.
+        pattern:     Filename pattern(s), separated by ';'. Example: '*.pdf'.
+        max_results: Maximum number of files to return.
+    """
+    import fnmatch
+    import time as _time
+
+    root = resolve_user_folder(directory)
+    if not root.is_dir():
+        return f"Error: folder not found — {root}"
+    if _is_restricted(str(root)):
+        return f"Error: Searching '{root}' is restricted for security reasons."
+    patterns = [p.strip().lower() for p in (pattern or "*").split(";") if p.strip()] or ["*"]
+    deadline = _time.monotonic() + 15
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Skip hidden folders, caches and secret stores
+        dirnames[:] = [d for d in dirnames if not d.startswith(".") and d.lower() not in ("node_modules", "__pycache__", "appdata")
+                       and not _is_sensitive(os.path.join(dirpath, d))]
+        for fname in filenames:
+            if any(fnmatch.fnmatch(fname.lower(), p) for p in patterns):
+                full = os.path.join(dirpath, fname)
+                if not _is_sensitive(full):
+                    found.append(full)
+                    if len(found) >= max_results:
+                        break
+        if len(found) >= max_results or _time.monotonic() > deadline:
+            break
+    guard.log_file_access("FIND", str(root), allowed=True)
+    if not found:
+        return f"No files matching {', '.join(patterns)} in {root}."
+    lines = [f"Found {len(found)} file(s) matching {', '.join(patterns)} in {root}:"]
+    for f in found:
+        try:
+            lines.append(f"- {os.path.relpath(f, root)}  ({os.path.getsize(f) / 1024:.0f} KB)")
+        except OSError:
+            lines.append(f"- {os.path.relpath(f, root)}")
+    return "\n".join(lines)
+
+
 def search_in_files(directory: str, query: str, extension: str = ".txt") -> str:
     """
     Search for a text query across all files of a given extension in a directory.

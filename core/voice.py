@@ -50,6 +50,15 @@ except (ImportError, OSError, Exception):
     pass
 
 
+def _cloud_speech_allowed() -> bool:
+    try:
+        from core.settings import get_setting
+        value = get_setting("cloud_speech_fallback", False)
+        return value is True or str(value).lower() in ("1", "true", "yes")
+    except Exception:
+        return False
+
+
 class VoiceInterface:
     def __init__(self):
         log.info("Initializing New Voice Pipeline (Phase 1 V2)...")
@@ -408,8 +417,13 @@ class VoiceInterface:
             # Optimize Whisper with beam_size=1 and C++ level VAD filtering
             segments, info = self.stt_model.transcribe(audio_np, beam_size=1, vad_filter=True)
             text = "".join([segment.text for segment in segments]).strip()
+        elif not _cloud_speech_allowed():
+            log.warning("Offline speech recognition (faster-whisper) is not installed and the cloud "
+                        "speech fallback is off, so voice input is unavailable. Install the voice add-on "
+                        "or enable 'cloud_speech_fallback' in Settings.")
+            text = ""
         else:
-            # Fallback to speech_recognition if faster-whisper is not available
+            # Opt-in fallback: Google's free web speech API (audio leaves this computer)
             import speech_recognition as sr
             r = sr.Recognizer()
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
@@ -509,8 +523,13 @@ class VoiceInterface:
         try:
             if self.engine_type == "elevenlabs" and HAS_ELEVENLABS:
                 self._speak_elevenlabs_stream(text_generator, interrupt_event)
-            else:
+            elif self.engine_type in ("edge-tts", "edge"):
                 self._speak_edge_tts_stream(text_generator, interrupt_event)
+            else:
+                # Default: offline Windows voice (no internet, nothing leaves the PC)
+                text = "".join(str(part) for part in text_generator if part)
+                if text.strip() and not interrupt_event.is_set():
+                    self._speak_windows_sapi(text)
         finally:
             self._speaking = False
 

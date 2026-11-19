@@ -105,3 +105,11 @@ test_live.txt
 backup_snapshot/
 ChatGPT_upload_files/
 graphify-out/
+
+# Packaging outputs
+packaging/build/
+packaging/dist/
+desktop/release/
+
+# Local Claude Code tooling (per-machine launch configs, worktrees)
+.claude/

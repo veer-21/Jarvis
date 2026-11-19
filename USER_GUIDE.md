@@ -1,138 +1,105 @@
-# 🤖 JARVIS AI Assistant — Everyday Consumer User Guide
+# JARVIS User Guide
 
-Welcome to **JARVIS v4.0–v8.0 Consumer Edition**! This guide explains how to launch, configure, and use JARVIS as your daily personal AI operating system on Windows.
+JARVIS is a personal assistant that lives on your Windows PC. You talk to it (by typing or
+voice), and it can chat, remember things you tell it, set reminders, keep your to-do list, find
+and organize files, look things up on the web and open apps for you.
 
----
-
-## 🚀 1. 1-Click Launch Options
-
-JARVIS can be launched in three friendly ways on your PC:
-
-1. **Desktop Shortcut (`JARVIS AI Assistant.lnk`)**:
-   - Double-click the **JARVIS AI Assistant** icon on your Windows Desktop.
-   - Starts the background services and opens your interactive assistant in your default browser.
-2. **Web Assistant (`Start_Jarvis.bat`)**:
-   - Double-click `Start_Jarvis.bat` in `D:\Jarvis`.
-   - Automatically checks system ports, starts the FastAPI neural backend, validates health status, and opens `http://127.0.0.1:7799`.
-3. **Floating Desktop HUD App (`Start_Jarvis_Desktop.bat`)**:
-   - Double-click `Start_Jarvis_Desktop.bat` to launch the standalone Electron floating HUD window.
-   - Supports transparent dark glassmorphism, window pinning, and global hotkey invocation.
+It **always asks before doing anything risky**, and you can see everything it did.
 
 ---
 
-## 🪄 2. First-Run Setup Wizard
+## 1. Install
 
-When launching JARVIS for the first time (or clicking the **Setup Wizard** button in the top navigation bar), a 3-step wizard guides your initial setup:
+1. Download **JARVIS Setup.exe** from the releases page and run it.
+   - If Windows SmartScreen says "Windows protected your PC", choose **More info → Run anyway**.
+     (This appears until the installer is code-signed.)
+2. Start **JARVIS** from the Start menu or the desktop shortcut.
+3. The first start can take up to a minute.
 
-1. **Your Name & City**:
-   - Set what JARVIS should address you as (e.g. *Tony*, *Alex*, or *Sir*).
-   - Enter your home city (e.g. *San Francisco*, *London*, or *New York*) for accurate morning weather and local briefings.
-2. **AI Intelligence Engine**:
-   - Enter your Google Gemini API key for cloud intelligence, or enable **Offline Mode** to run locally.
-3. **Voice & Audio Profile**:
-   - Choose your preferred voice engine and listening settings.
+JARVIS keeps running in the **system tray** (bottom-right, near the clock) when you close the
+window. Press **Ctrl + Shift + J** to show or hide it. To exit completely, right-click the tray
+icon → **Quit JARVIS**.
 
-All settings are securely persisted in `data/user_preferences.json` and loaded automatically on every startup.
+## 2. First-run setup (2 minutes)
 
----
+The setup wizard opens automatically:
 
-## 🖥️ 3. Everyday Mode vs. Pro HUD Mode
+1. **About you** — your name and city (for greetings and weather).
+2. **Choose your AI** — JARVIS needs an AI model to think. Pick one:
+   - **Google Gemini** (recommended, free tier): click **Get a key**, sign in with Google, create a
+     key, paste it, press **Test**, then **Save key**.
+   - **Groq** (fast, free tier) or **OpenAI** (paid) work the same way.
+   - **Local AI (Ollama)**: fully private and offline. Install Ollama, run `ollama pull llama3.2`,
+     then choose **Use local AI**. Needs a reasonably powerful PC.
+3. **Privacy & permissions** — what stays on your PC and what is sent to the AI.
+4. **Ready check** — shows what works on your PC. Only the AI model is required.
 
-JARVIS features two visual modes tailored to your working style:
+You can reopen the wizard any time with **Setup**, and change everything in **Settings**.
 
-### Everyday Mode (Default)
-Designed for seamless daily productivity:
-- **8 1-Click Daily Routine Cards**: Instant shortcuts for frequent everyday requests.
-- **Interactive My To-Dos & Active Reminders Bar**: Manage your tasks and active timers with 1-click chip buttons.
-- **Smart Notification Toasts**: Native Windows notification toasts when your timers and reminders expire.
+## 3. Things to try
 
-### Pro HUD Mode
-Designed for advanced workflows, developers, and power users:
-- Real-time 5-agent execution status (**Commander**, **Security**, **Memory**, **Operator**, **Refiner**).
-- Audio visualizer with voice state transitions (`LISTENING`, `THINKING`, `SPEAKING`).
-- Live system resource telemetry (CPU, RAM, Disk, System Uptime).
+| Say or type | What happens |
+|---|---|
+| "Remind me in 20 minutes to call Mom" | Sets a reminder (Windows notification when it's time) |
+| "Add buy milk to my to-do list" / "Show my to-do list" | Manages your to-dos (also in the bar at the top) |
+| "Give me my daily briefing" | Weather, your tasks and PC status |
+| "Summarize https://…" | Reads and summarizes a web page |
+| "Find PDF files in my Downloads" | Searches your files |
+| "Preview organizing my Downloads folder" | Shows what would be moved, without changing anything |
+| "Clean up my Downloads folder" | Asks your permission, then sorts files into folders (can be undone) |
+| "My favourite colour is teal" … later "What's my favourite colour?" | JARVIS remembers |
+| "Forget my favourite colour" | Removes it from memory |
+| "What time is it?" | Instant answer, no AI needed |
 
-Use the **Everyday Mode / Pro HUD Mode** toggle switch in the top header to switch modes anytime.
+The **1-Click Daily Routines** at the top run common requests for you.
 
----
+**Everyday Mode** (default) shows routines, your to-dos and reminders and the chat. **Pro HUD
+Mode** (top bar) adds a timeline of each step JARVIS takes and live system metrics.
 
-## ⚡ 4. The 8 1-Click Daily Routine Cards
+## 4. Permissions — JARVIS asks first
 
-In Everyday Mode, the top bar provides instant 1-click execution cards:
+When a request would change something (write or delete a file, run code, type into another app,
+change a setting), a **permission card** shows exactly what will run:
 
-| Card | Action | Description |
-| :--- | :--- | :--- |
-| 🌅 **Morning Briefing** | `Give me my daily briefing` | Combines current date, weather, system health, and today's reminders into a concise briefing. |
-| 📁 **Organize Downloads** | `Preview organizing my Downloads folder` | Safely classifies files into categorized folders (`Documents`, `Images`, `Media`, etc.) with 1-click undo. |
-| ✉️ **Draft an Email** | `Help me draft a professional email` | Synthesizes a clean email draft, copies it to your clipboard, and opens Gmail or your default mail client. |
-| 🖥️ **Read My Screen** | `Read and summarize the text on my screen` | Extracts text from your foreground window and explains or summarizes what is on screen. |
-| 📝 **Show My To-Dos** | `Show my personal to-do list and pending tasks` | Displays active tasks, notes, and pending checklist items. |
-| 📋 **Clipboard Helper** | `Check clipboard history and format text` | Reads and formats your current clipboard and recent clip history. |
-| ⏰ **Quick Reminder** | `Remind me in 15 minutes to take a break` | Schedules a local countdown timer with native Windows toast alerts. |
-| ⚡ **Health Check** | `Check my computer speed, CPU, and memory` | Checks CPU load, RAM usage, and available storage. |
+- **Allow** — do it once. **Don't allow** — nothing happens.
+- **Always allow this action** — only offered for low-risk actions. High-risk actions always ask.
+- Remove saved permissions any time in **Settings → Saved permissions**.
 
----
+JARVIS never reads password files, SSH keys or browser data, and after it reads something from
+the web it asks again before taking actions (a web page can't trick it into acting on its own).
 
-## ⌨️ 5. Global Hotkey (`Alt + Space`) & Screen Context
+## 5. Activity
 
-When using the desktop application, press **`Alt + Space`** from within any application (browser, code editor, PDF viewer, or spreadsheet) to summon JARVIS over your active screen.
+**Activity** (top bar) lists everything JARVIS did on your PC — every tool it ran, anything that
+was blocked, and every permission you gave. Click an entry for details.
 
-Ask questions directly about what you are currently looking at:
-- *"What does this error message mean?"*
-- *"Summarize this document on my screen."*
-- *"Help me reply to the message in this window."*
+## 6. Voice (optional)
 
-JARVIS inspects foreground window metadata and text without requiring manual screenshots or file uploads.
+- Click the **microphone** to speak, or hold **F9** when JARVIS is listening.
+- **Voice on/off** (top bar) makes JARVIS read replies aloud.
+- By default JARVIS uses the offline Windows voice. You can choose the online Microsoft Edge
+  voice in **Settings → Voice**.
+- Speech recognition works offline when the voice add-on is installed. Using Google's free online
+  recognition is off by default (it sends your audio to Google) and can be enabled in Settings.
 
----
+## 7. Settings
 
-## 🗣️ 6. 25 Everyday Voice & Text Commands
+- **AI providers** — add or replace keys (they are stored in Windows Credential Manager and never
+  shown again), choose the main AI. If one provider is down, JARVIS automatically uses another.
+- **Saved permissions**, **Voice**, **App lock PIN** (protects the browser version),
+  **crash reports** (off by default) and **Export diagnostics**.
 
-Here are 25 practical commands you can speak or type to JARVIS right now:
+## 8. Troubleshooting
 
-### Folder Decluttering & Recovery
-1. `"Preview organizing my Downloads folder"` — Performs a safe dry-run showing what would be sorted.
-2. `"Clean up my Desktop folder"` — Moves loose files into categorized folders.
-3. `"Undo folder organization in Downloads"` — Restores every moved file back to its exact original location.
+| Problem | Fix |
+|---|---|
+| "JARVIS could not start" | Click **Try again**. If it keeps failing, use **Open logs folder** and send the logs. |
+| Replies say every AI provider is unavailable | Check your internet, then **Settings → AI providers → Test**. Your key may be expired or over quota. |
+| A reply is wrong or JARVIS did the wrong thing | Check **Activity** to see what it did; most actions can be undone (e.g. folder organization). |
+| Need help | **Settings → Export diagnostics** creates a zip without your keys, memories or conversations. |
 
-### Reminders & Countdown Timers
-4. `"Remind me in 10 minutes to submit the invoice"` — Sets a 10-minute timer.
-5. `"Set a timer for 45 minutes to finish the presentation"` — Schedules a focus timer.
-6. `"Show my active reminders"` — Lists all pending countdown timers.
-7. `"Cancel reminder rem_abc123"` — Cancels a scheduled reminder.
+## 9. Uninstall
 
-### Personal To-Dos & Quick Notes
-8. `"Add to-do: Review client contract by Friday"` — Adds a persistent task.
-9. `"Show my to-do list"` — Displays pending tasks and checkboxes.
-10. `"Mark task Review client contract as completed"` — Marks a to-do as finished.
-11. `"Delete task Review client contract"` — Removes a task from storage.
-
-### Document & Web Summarization
-12. `"Summarize document sample.pdf"` — Extracts text from local PDF, Word (.docx), or text files.
-13. `"Read and summarize https://news.ycombinator.com"` — Cleans web articles, removes ads, and provides a summary.
-14. `"What are the key takeaways from contract.docx?"` — Answers questions focused on local files.
-15. `"Explain this report on my Desktop"` — Locates and summarizes documents on your Desktop.
-
-### Smart Email & Message Drafting
-16. `"Draft an email to boss@company.com about quarterly review"` — Creates a polite email draft and copies it to clipboard.
-17. `"Write an email about scheduling a demo meeting"` — Formats a ready-to-send message with your configured signature.
-18. `"Compose an email to team@startup.io regarding sprint launch and open in Gmail"` — Opens Gmail with all fields pre-filled.
-
-### Windows OS Controls & Clipboard
-19. `"Turn the volume up"` — Increases master audio volume.
-20. `"Mute volume"` — Toggles master volume mute.
-21. `"Open task manager"` — Launches Windows Task Manager.
-22. `"Open Windows settings"` — Opens Windows Settings app.
-23. `"What is on my clipboard?"` — Reads current clipboard contents.
-24. `"Copy to clipboard: Meeting notes for tomorrow"` — Writes formatted text to system clipboard.
-
-### Daily Briefing & Health
-25. `"Give me my morning briefing"` — Full briefing with date, weather, system stats, and upcoming tasks.
-
----
-
-## 🛡️ 7. Privacy, Safety & Data Storage
-
-- **Zero Cloud Leakage of Local Data**: Your files, to-dos, reminders, and clipboard history stay on your local disk in `D:\Jarvis\data\`.
-- **Security Guard (`LOW_RISK` to `CRITICAL`)**: Actions that modify system state or files are vetted before execution. Destructive actions (like emptying the recycle bin) require explicit confirmation.
-- **Persistent Recovery**: All pending timers and reminders are automatically recovered across system restarts.
+**Windows Settings → Apps → JARVIS → Uninstall.** Your data is kept in
+`%LOCALAPPDATA%\JARVIS` in case you reinstall; delete that folder to remove it completely, and
+remove the "JARVIS/…" entries in **Credential Manager → Windows Credentials**.

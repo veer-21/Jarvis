@@ -113,6 +113,7 @@ class ExecutionContext(BaseModel):
     stream_completed: bool = Field(default=False, description="Flag indicating stream completed cleanly")
     is_interrupted: bool = Field(default=False, description="Flag indicating stream was interrupted")
     stream_error: Optional[str] = Field(default=None, description="Error string if streaming failed")
+    streamed_via_socket: bool = Field(default=False, description="Chunks were already pushed to the WebSocket session")
 
     # Private cancellation event for cooperative interruption
     _cancel_event: threading.Event = PrivateAttr(default_factory=threading.Event)

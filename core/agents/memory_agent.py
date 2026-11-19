@@ -4,6 +4,8 @@ Background agent for intelligent memory operations:
 auto-summarization, importance scoring, and proactive context preparation.
 """
 
+from typing import Optional
+
 from core.logger import log
 from core.agents.base_agent import BaseAgent, AgentMessage, AgentResponse, AgentRole
 

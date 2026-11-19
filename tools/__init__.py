@@ -32,6 +32,7 @@ def get_tool_registry() -> dict:
         registry["safe_delete_file"] = file_tools.safe_delete_file
         registry["get_file_info"]    = file_tools.get_file_info
         registry["search_in_files"]  = file_tools.search_in_files
+        registry["find_files"]       = file_tools.find_files
         registry["graphify_query"]   = file_tools.graphify_query
     except ImportError as e:
 
@@ -163,7 +164,7 @@ def get_tool_categories() -> dict[str, list[str]]:
     return {
         "system":     ["execute_command", "schedule_task", "list_scheduled_tasks"],
         "file":       ["read_file", "write_file", "list_directory", "safe_delete_file",
-                        "get_file_info", "search_in_files"],
+                        "get_file_info", "search_in_files", "find_files"],
         "web":        ["web_search", "fetch_webpage", "get_weather", "search_news"],
         "automation": ["open_application", "take_screenshot", "analyze_screen", "get_system_info",
                         "press_key", "type_text", "click_mouse", "move_mouse", "scroll_mouse",

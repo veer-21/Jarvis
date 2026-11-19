@@ -13,6 +13,7 @@ import uuid
 import re
 import asyncio
 import threading
+from pathlib import Path
 from typing import Optional, Any, Callable, AsyncIterator
 from datetime import datetime, timezone
 
@@ -559,26 +560,15 @@ class AssistantOrchestrator:
             except Exception:
                 pass
 
-            planning_chunk = "[PLANNING] Analyzing goal and decomposing into steps...\n"
-            try:
-                from api.ws_manager import ws_manager
-                if session_id:
-                    await ws_manager.send_chunk_to_session(session_id, planning_chunk)
-            except Exception:
-                pass
-            yield planning_chunk
+            # Progress is signalled through the THINKING status above. The orchestrator only
+            # *yields* text; delivering it (WebSocket, SSE, voice) is the caller's job, so
+            # replies are never sent twice.
             await asyncio.sleep(0)
 
             # Unregister the stream task shell before delegating to full process DAG
             self._unregister_active_task(task)
             task = None
             response = await asyncio.to_thread(self.process, raw_text, context)
-            try:
-                from api.ws_manager import ws_manager
-                if session_id:
-                    await ws_manager.send_chunk_to_session(session_id, response)
-            except Exception:
-                pass
             yield response
         finally:
             try:
@@ -689,9 +679,25 @@ JSON:"""
             log.warning(f"[Orchestrator] General planner LLM parse failed: {e}")
         return None
 
+    @staticmethod
+    def _conversational_step(user_request: str) -> TaskStep:
+        return TaskStep(
+            step_id="step_1",
+            description="Process user request and respond",
+            capability="reasoning",
+            input_variables={"request": user_request},
+            dependencies=[],
+        )
+
     def _heuristic_plan_decomposition(self, user_request: str) -> list[TaskStep]:
         """Intelligent heuristic fallback plan decomposition."""
         req_lower = user_request.lower()
+
+        # "How do I delete a file in Python?" asks for instructions; it must never trigger
+        # an action tool. Such questions go to the conversational model.
+        if re.match(r"^\s*(?:can you (?:tell|show|explain)(?: me)? )?(?:how (?:do|can|would|should|could) (?:i|you|we|one)|how to)\b",
+                    req_lower):
+            return [self._conversational_step(user_request)]
 
         # Single app launch
         if req_lower.startswith("open ") and (" and " not in req_lower or "running" in req_lower):
@@ -829,15 +835,45 @@ JSON:"""
             ]
 
         # File search / find files
-        if ("find" in req_lower or "search" in req_lower) and ("files" in req_lower or "todo" in req_lower):
-            query = "TODO" if "todo" in req_lower else ("*.py" if "python" in req_lower else "file")
+        _file_type_words = ("files", "todo", "pdf", "photo", "picture", "image", "video", "spreadsheet", "word doc",
+                            "documents", "music file", "zip")
+        if (any(v in req_lower for v in ("find", "search", "locate")) or req_lower.startswith("show me my ")) and            any(w in req_lower for w in _file_type_words) and "web" not in req_lower and "online" not in req_lower:
+            folder = next((name for name in ("downloads", "documents", "desktop", "pictures", "music", "videos")
+                           if name in req_lower), None)
+            if folder is None and any(w in req_lower for w in ("current folder", "this folder", "the directory", "current directory")):
+                folder = "."
+            type_patterns = {
+                "pdf": "*.pdf", "word": "*.docx;*.doc", "docx": "*.docx", "excel": "*.xlsx;*.xls;*.csv",
+                "spreadsheet": "*.xlsx;*.xls;*.csv", "powerpoint": "*.pptx;*.ppt", "python": "*.py",
+                "image": "*.jpg;*.jpeg;*.png;*.gif;*.webp", "photo": "*.jpg;*.jpeg;*.png;*.heic",
+                "picture": "*.jpg;*.jpeg;*.png;*.gif", "video": "*.mp4;*.mov;*.mkv;*.avi",
+                "music": "*.mp3;*.wav;*.flac;*.m4a", "text": "*.txt;*.md", "zip": "*.zip;*.rar;*.7z",
+            }
+            content_match = re.search(r"\b(?:for|containing|that contain|with the text)\s+[\"']?(.+?)[\"']?\s*$", user_request, re.I)
+            pattern = next((p for word, p in type_patterns.items() if word in req_lower), None)
+            if content_match and not pattern or "todo" in req_lower:
+                # Search text INSIDE files ("search my files for TODO")
+                query = "TODO" if "todo" in req_lower and not content_match else content_match.group(1).strip()
+                return [
+                    TaskStep(
+                        step_id="step_1",
+                        description=f"Search inside files for '{query}'",
+                        capability="file",
+                        tool_name="search_in_files",
+                        input_variables={"query": query, "directory": str(Path.home() / "Documents") if folder in (None, "documents") else
+                                         ("." if folder == "." else str(Path.home() / folder.capitalize())), "extension": "*"},
+                        dependencies=[]
+                    )
+                ]
+            # Find files by name/type ("find PDF files in my Downloads")
             return [
                 TaskStep(
                     step_id="step_1",
-                    description=f"Search files for '{query}'",
+                    description=f"Find {pattern or 'all'} files in {folder or 'Documents'}",
                     capability="file",
-                    tool_name="search_in_files",
-                    input_variables={"query": query, "directory": "."},
+                    tool_name="find_files",
+                    input_variables={"directory": folder.capitalize() if folder and folder != "." else (folder or "Documents"),
+                                     "pattern": pattern or "*"},
                     dependencies=[]
                 )
             ]
@@ -936,6 +972,8 @@ JSON:"""
            (req_lower.startswith("add ") and any(w in req_lower for w in ("todo", "to-do", "task to my list", "item to my list"))):
             title = re.sub(r"^(?:add\s+)?(?:a\s+)?(?:new\s+)?(?:to-?do(?:\s+item)?|task)\s*(?::\s*)?", "", user_request, flags=re.IGNORECASE).strip()
             title = re.sub(r"\s+to\s+my\s+(?:to-?do\s+)?list.*$", "", title, flags=re.IGNORECASE).strip()
+            # "Add buy milk to my to-do list" -> "buy milk" (the verb is not part of the task)
+            title = re.sub(r"^(?:please\s+)?(?:add|put)\s+", "", title, flags=re.IGNORECASE).strip()
             if not title:
                 title = "New Task"
             return [
@@ -1035,7 +1073,7 @@ JSON:"""
             ]
 
         # Folder smart organization & undo
-        if any(w in req_lower for w in ("clean up", "organize", "declutter")) and any(w in req_lower for w in ("downloads", "desktop", "folder", "documents")):
+        if any(w in req_lower for w in ("clean up", "organiz", "declutter", "tidy")) and any(w in req_lower for w in ("downloads", "desktop", "folder", "documents")):
             target_dir = "Downloads" if "downloads" in req_lower else ("Desktop" if "desktop" in req_lower else "Documents" if "documents" in req_lower else ".")
             dry_run = "preview" in req_lower or "dry run" in req_lower or "would" in req_lower
             return [
@@ -1079,7 +1117,12 @@ JSON:"""
             ]
 
         # Reminders & timers
-        if "remind" in req_lower or "timer" in req_lower:
+        # Reminders need an actual time ("in 10 minutes", "at 5pm", "tomorrow"); "remind me what we
+        # talked about" is a memory question, not a timer.
+        _has_time = re.search(r"\b(?:in|after|for)\s+(?:an?|\d+|one|two|three|five|ten|fifteen|twenty|thirty|half an?)\s*"
+                              r"(?:sec|second|min|minute|hour|hr|day)s?\b|\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b|"
+                              r"\b(?:tomorrow|tonight|this (?:evening|afternoon|morning)|every\s+\w+|noon|midnight)\b", req_lower)
+        if ("timer" in req_lower) or ("remind" in req_lower and _has_time):
             m_sec = re.search(r"(?:in|for)\s+(\d+)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours)", req_lower)
             if not m_sec and any(phrase in req_lower for phrase in ("list", "show", "check my", "what are my", "active reminders", "my reminders", "my timers")):
                 return [
@@ -1609,7 +1652,50 @@ JSON:"""
             if res and res.strip():
                 return res
 
-        return str(list(step_outputs.values())[-1])
+        return self._humanize_result(task, step_outputs)
+
+    @staticmethod
+    def _humanize_result(task: AssistantTask, step_outputs: dict) -> str:
+        """Plain-language reply built from tool output (used when no language model answered)."""
+        import ast
+        value = list(step_outputs.values())[-1]
+        tool = next((s.tool_name for s in reversed(getattr(task, "plan", None) or [])
+                     if s.step_id in step_outputs and s.tool_name), None)
+        if isinstance(value, str) and value.strip().startswith("{"):
+            try:
+                value = ast.literal_eval(value.strip())
+            except (ValueError, SyntaxError):
+                return value
+        if not isinstance(value, dict):
+            return str(value) if value not in (None, "") else "Done."
+
+        if value.get("success") is False:
+            return f"That didn't work: {value.get('error') or value.get('message') or 'unknown error'}."
+        if tool == "create_reminder_or_timer" and value.get("trigger_at"):
+            try:
+                when = datetime.fromisoformat(str(value["trigger_at"])).astimezone()
+                return f"Okay, I'll remind you to {value.get('title') or value.get('message')} at {when.strftime('%I:%M %p').lstrip('0')}."
+            except ValueError:
+                pass
+        for key in ("message", "summary", "briefing_markdown", "body", "text", "result", "output"):
+            if isinstance(value.get(key), str) and value[key].strip():
+                return value[key]
+        for key in ("items", "todos", "pending_todos", "results", "files", "reminders"):
+            items = value.get(key)
+            if isinstance(items, list):
+                if not items:
+                    return "Nothing found."
+                lines = []
+                for item in items[:10]:
+                    if isinstance(item, dict):
+                        lines.append("- " + str(item.get("content") or item.get("title") or item.get("name") or item))
+                    else:
+                        lines.append(f"- {item}")
+                more = f"\n…and {len(items) - 10} more." if len(items) > 10 else ""
+                return "\n".join(lines) + more
+        simple = {k: v for k, v in value.items() if k != "success" and isinstance(v, (str, int, float, bool))}
+        details = ", ".join(f"{k.replace('_', ' ')}: {v}" for k, v in list(simple.items())[:4])
+        return f"Done. {details}" if details else "Done."
 
     def _extract_candidates(self, tool_name: str, output: Any) -> list[str]:
         """Extract candidate items from tool outputs for referential follow-up."""

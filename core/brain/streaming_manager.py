@@ -130,6 +130,8 @@ class StreamingManager:
                 # Send token strictly to the owning WebSocket session (never broadcast private chunks)
                 if session_id:
                     await ws_manager.send_chunk_to_session(session_id, chunk)
+                    if context is not None:
+                        context.streamed_via_socket = True  # caller must not forward it again
                 yield chunk
 
             if not stream_interrupted and not stream_failed:

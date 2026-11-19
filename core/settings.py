@@ -34,6 +34,12 @@ class Settings(BaseModel):
     max_output_tokens: Optional[int] = Field(default=None, ge=64, le=65536)
     voice_engine: Optional[str] = Field(default=None, max_length=40)
     voice_profile: Optional[str] = Field(default=None, max_length=80)
+    # Tools the owner chose to "always allow" from a permission prompt (low/moderate risk only)
+    always_allow_tools: Optional[list[str]] = None
+    crash_reports_enabled: Optional[bool] = None
+    # Speech-to-text fallback through Google's free web service (sends audio to Google).
+    # Off by default; offline faster-whisper is used when installed.
+    cloud_speech_fallback: Optional[bool] = None
 
     model_config = {"extra": "ignore"}
 
@@ -50,6 +56,7 @@ ENV_EQUIVALENT = {
     "max_output_tokens": "JARVIS_MAX_OUTPUT_TOKENS",
     "voice_engine": "VOICE_ENGINE",
     "voice_profile": "VOICE_PROFILE",
+    "cloud_speech_fallback": "JARVIS_CLOUD_SPEECH_FALLBACK",
 }
 
 # Secrets the settings API may write to the vault (values are never returned).

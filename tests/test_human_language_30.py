@@ -241,7 +241,7 @@ def test_24_find_first_python_file(orchestrator):
     """24. 'Find python files in the directory.'"""
     plan = orchestrator._create_plan("Find python files in the directory.", "task")
     tools = [s.tool_name for s in plan if s.tool_name]
-    assert "search_in_files" in tools or "list_directory" in tools
+    assert "find_files" in tools or "search_in_files" in tools or "list_directory" in tools
 
 
 def test_25_read_that_file_referential(orchestrator):

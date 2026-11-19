@@ -1,22 +1,16 @@
 @echo off
-title JARVIS AI Operating System — Shutdown
-echo ======================================================================
-echo            Stopping JARVIS AI Operating System...
-echo ======================================================================
+title JARVIS - Stop
+echo Stopping JARVIS...
 
-echo [INFO] Stopping Electron Desktop HUD...
-taskkill /F /IM electron.exe >nul 2>&1
+:: Desktop app windows started from THIS folder only (other Electron apps are left alone)
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='electron.exe'\" | Where-Object { $_.ExecutablePath -like '%~dp0desktop\*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }" >nul 2>&1
 
-echo [INFO] Stopping Python Backend server...
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr :7799 ^| findstr LISTENING') do (
-    taskkill /F /PID %%a >nul 2>&1
-)
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr :8000 ^| findstr LISTENING') do (
-    taskkill /F /PID %%a >nul 2>&1
+:: The JARVIS backend (whatever is listening on its port 7799)
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":7799 " ^| findstr LISTENING') do (
+    taskkill /F /T /PID %%a >nul 2>&1
 )
 taskkill /F /FI "WINDOWTITLE eq JARVIS Backend*" >nul 2>&1
 
-echo.
-echo [SUCCESS] JARVIS processes terminated.
-pause
+echo JARVIS stopped.
+timeout /t 2 >nul
 exit /b 0
